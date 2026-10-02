@@ -16,6 +16,7 @@ module CabinetCraft
         'overrides' => 'Manual overrides',
         'status' => 'Production progress',
         'cabinet' => 'By cabinet',
+        'grainsets' => 'Matching-grain sets',
         'presentation' => 'Presentation (see-through carcass)'
       }.freeze
 
@@ -41,7 +42,7 @@ module CabinetCraft
 
       # cabinets: Cabinet list. production: Production state hash (only used by 'status'); ops_by_uid for the applicable stages.
       # => { 'mode', 'parts' => { part_uid => { 'key', 'label', 'color', 'alpha' } }, 'legend' => [{ 'label', 'color', 'count' }] }
-      def assign(mode, cabinets, production: {}, ops_by_uid: {})
+      def assign(mode, cabinets, production: {}, ops_by_uid: {}, grain_sets: {})
         raise ArgumentError, "Unknown visualization mode '#{mode}' (use #{MODES.keys.join(', ')})" unless MODES.key?(mode)
 
         parts = {}
@@ -49,14 +50,14 @@ module CabinetCraft
           rows = cab.part_rows.to_h { |r| [r['key'], r] }
           cab.panels.each do |panel|
             row = rows[panel.key]
-            parts[row['part_uid']] = classify(mode, cab, panel, row, ci, production, ops_by_uid)
+            parts[row['part_uid']] = classify(mode, cab, panel, row, ci, production, ops_by_uid, grain_sets)
           end
         end
         colour(mode, parts)
       end
 
       # Raw classification: { 'key' => category id, 'label' => text, 'alpha' => nil | 0..1 } (colours are assigned afterwards, in a fixed order).
-      def classify(mode, cab, panel, row, index, production, ops_by_uid)
+      def classify(mode, cab, panel, row, index, production, ops_by_uid, grain_sets = {})
         case mode
         when 'material' then { 'key' => row['material_id'], 'label' => row['material'], 'real' => true }
         when 'role' then role_class(panel)
@@ -64,9 +65,17 @@ module CabinetCraft
         when 'edges' then edge_class(panel)
         when 'overrides' then panel.overridden.empty? ? { 'key' => 'auto', 'label' => 'Automatic' } : { 'key' => 'manual', 'label' => 'Manually overridden' }
         when 'status' then status_class(row, production, ops_by_uid)
+        when 'grainsets' then grain_set_class(grain_sets[row['part_uid']])
         when 'cabinet' then { 'key' => "cabinet:#{index}", 'label' => cab.label }
         when 'presentation' then FRONT_ROLES.include?(panel.role) ? { 'key' => 'front', 'label' => 'Fronts (real material)', 'real' => true } : { 'key' => 'carcass', 'label' => 'Carcass (see-through)', 'alpha' => CARCASS_ALPHA }
         end
+      end
+
+      def grain_set_class(label)
+        return { 'key' => 'none', 'label' => 'Not in a set' } unless label
+
+        set = label[/\A[A-Z]+/]
+        { 'key' => "set:#{set}", 'label' => "Set #{set}" }
       end
 
       def role_class(panel)
@@ -134,6 +143,7 @@ module CabinetCraft
         when 'material' then Material.find(key)&.color || NEUTRAL
         when 'edges' then edge_colour(key)
         when 'status' then { 'todo' => NEUTRAL, 'partial' => WARN, 'complete' => GOOD }.fetch(key, NEUTRAL)
+        when 'grainsets' then key == 'none' ? NEUTRAL : PALETTE[key.delete_prefix('set:').each_char.sum { |c| c.ord - 65 } % PALETTE.size]
         when 'overrides' then key == 'manual' ? PALETTE[1] : NEUTRAL
         when 'presentation' then key == 'carcass' ? '#c9ccd2' : PALETTE[0]
         else PALETTE[index % PALETTE.size]

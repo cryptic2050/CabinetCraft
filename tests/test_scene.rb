@@ -3061,7 +3061,7 @@ class TestNestStudioAssets < Minitest::Test
   end
 
   def test_every_rpc_the_studio_page_makes_is_whitelisted_or_handled_by_the_dialog
-    allowed = CabinetCraft::Interface::Controller::PUBLIC_METHODS + %w[export open_nest_studio start_door_tool]
+    allowed = CabinetCraft::Interface::Controller::PUBLIC_METHODS + %w[export open_nest_studio start_door_tool start_grain_tool]
     assert_empty calls('nest_studio.js') - allowed
     assert_empty calls('dashboard.js') - allowed
   end
@@ -3176,5 +3176,69 @@ class TestDoorSwing < Minitest::Test
     @c.toggle_doors([cab['id']], nil, false)
     after = door('-DOOR_1').bounds.min.to_a
     before.zip(after).each { |a, b| assert_in_delta a, b, 1e-6 }
+  end
+end
+
+class TestGrainSetsScene < Minitest::Test
+  def setup
+    Sketchup.reset_model!
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    CabinetCraft::Material.config = CabinetCraft::MaterialConfig.new
+    @c = CabinetCraft::Interface::Controller.new
+    @model = Sketchup.active_model
+    @c.create('base_double_door', {})
+    @c.create('base_single_door', {})
+  end
+
+  def part(suffix)
+    @model.entities.grep(Sketchup::Group).flat_map { |g| g.entities.grep(Sketchup::Group) }.find { |p| p.name.end_with?(suffix) }
+  end
+
+  def uid(suffix)
+    part(suffix).get_attribute(CabinetCraft::Scene::PART_DICT, 'part_uid')
+  end
+
+  def test_selected_parts_become_a_set_numbered_in_selection_order
+    @model.selection.clear
+    [part('B02-DOOR_1'), part('B01-DOOR_2'), part('B01-DOOR_1')].each { |p| @model.selection.add(p) }
+    s = @c.assign_selected_grain_set
+    assert_equal [1, 3], [s['sets'].size, s['parts']]
+    assert_equal %w[A1 A2 A3], s['sets'][0]['parts'].map { |p| p['label'] }
+    assert_equal %w[B02-DOOR_1 B01-DOOR_2 B01-DOOR_1], s['sets'][0]['parts'].map { |p| p['part_id'] }
+  end
+
+  def test_sets_are_kept_in_the_model_and_cleaned_when_their_cabinet_is_deleted
+    @c.assign_grain_set([uid('B01-DOOR_1'), uid('B01-DOOR_2')])
+    assert_equal 2, CabinetCraft::Interface::Controller.new.grain_sets_state['parts']
+    @model.entities.grep(Sketchup::Group).first.erase! # the whole cabinet is deleted from the model
+    assert_equal 0, @c.grain_sets_state['parts'] # the set is left with no parts, so it no longer exists
+  end
+
+  def test_errors
+    assert_raises(ArgumentError) { @c.assign_selected_grain_set }
+    assert_raises(ArgumentError) { @c.assign_grain_set(['nope', 'nada']) }
+    assert_raises(ArgumentError) { @c.assign_grain_set([uid('B01-DOOR_1')]) }
+  end
+
+  def test_the_view_mode_colours_sets_and_clear_resets
+    @c.assign_grain_set([uid('B01-DOOR_1'), uid('B01-DOOR_2')])
+    @c.assign_grain_set([uid('B02-DOOR_1'), uid('B01-SIDE_LEFT')])
+    s = @c.set_visualization('grainsets')
+    labels = s['legend'].map { |l| l['label'] }
+    assert_includes labels, 'Set A'
+    assert_includes labels, 'Set B'
+    assert_includes labels, 'Not in a set'
+    c1 = part('B01-DOOR_1').material.color.rgb
+    assert_equal c1, part('B01-DOOR_2').material.color.rgb
+    refute_equal c1, part('B02-DOOR_1').material.color.rgb
+    @c.clear_grain_sets
+    assert_equal ['Not in a set'], @c.visualization_state['legend'].map { |l| l['label'] }
+  end
+
+  def test_label_positions_for_the_click_tool
+    @c.assign_grain_set([uid('B01-DOOR_1'), uid('B02-DOOR_1')])
+    l = @c.grain_set_labels
+    assert_equal %w[A1 A2], l.map { |x| x['label'] }
+    assert_operator l[1]['x'], :>, l[0]['x'] # the second cabinet stands to the right of the first
   end
 end

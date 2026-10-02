@@ -88,6 +88,15 @@ module CabinetCraft
       end
 
       # The active visualization mode (see Manufacturing::Visualization); 'material' when unset.
+      # { part_uid => 'A1' } matching-grain sets (Manufacturing::GrainSets)
+      def grain_sets
+        read_json('grain_sets')
+      end
+
+      def grain_sets=(hash)
+        @model.set_attribute(DICT, 'grain_sets', JSON.generate(hash))
+      end
+
       def viz_mode
         @model.get_attribute(DICT, 'viz_mode', nil).to_s
       end

@@ -924,7 +924,7 @@
   }
 
   // ---- Production ------------------------------------------------------------------------------------------
-  function loadViz() { Promise.all([rpc('visualization_state'), rpc('doors_state')]).then(([z, d]) => { S.viz = z; S.doors = d; paintViz(); }).catch(showError); }
+  function loadViz() { Promise.all([rpc('visualization_state'), rpc('doors_state'), rpc('grain_sets_state')]).then(([z, d, g]) => { S.viz = z; S.doors = d; S.gsets = g; paintViz(); }).catch(showError); }
   function paintViz() {
     const v = $('#view'); const z = S.viz; if (S.tab !== 'view' || !z) return;
     const modes = Object.keys(z.modes).map((k) => `<button class="${k === z.mode ? 'primary' : ''}" data-viz="${esc(k)}">${esc(z.modes[k])}</button>`).join(' ');
@@ -934,7 +934,14 @@
       <div class="card"><h3>Doors</h3><p class="mute">Swings the doors of the cabinets open or closed in the model (one undo step; closing restores the exact position). ${S.doors ? `${S.doors.open} of ${S.doors.cabinets} cabinets with doors are open.` : ''}</p>
         <div class="row"><div class="field" style="flex:0 0 120px"><label>Angle (deg)</label><input type="number" id="door_angle" min="0" max="120" value="${S.doors ? S.doors.default_angle : 95}"></div>
         <button class="primary" id="doors_toggle">OPEN / CLOSE ALL DOORS</button><button class="ghost" id="doors_click">Click a cabinet to open it</button></div></div>
+      <div class="card"><h3>Matching-grain sets</h3><p class="mute">Parts that must follow one grain (for example the doors of a tall unit) are labelled A1, A2, ... in the order you pick them. Select two or more parts in SketchUp and press the button, or use the click tool. The nesting does not yet keep a set together; the labels are for marking and the VIEW colours.</p>
+        <div class="row"><button class="primary" id="gs_sel">Group selected parts</button><button class="ghost" id="gs_tool">Click tool</button><button class="ghost" id="gs_clear">Clear all sets</button></div>
+        ${S.gsets && S.gsets.sets.length ? `<table class="legend"><tbody>${S.gsets.sets.map((x) => `<tr><td><b>Set ${esc(x.set)}</b></td><td>${x.parts.map((p) => `${esc(p.label)} ${esc(p.part_id)}`).join(', ')}</td></tr>`).join('')}</tbody></table>` : '<p class="mute">No sets yet.</p>'}</div>
       <div class="card"><h3>Legend</h3>${z.parts ? `<table class="legend"><tbody>${rows}</tbody></table>` : '<p class="mute">No cabinets in the model yet.</p>'}</div>`;
+    const gs = (m, msg) => rpc(m).then((r) => { toast(msg || 'Done'); loadViz(); }).catch(showError);
+    $('#gs_sel').onclick = () => gs('assign_selected_grain_set', 'Matching-grain set created');
+    $('#gs_clear').onclick = () => gs('clear_grain_sets', 'All sets cleared');
+    $('#gs_tool').onclick = () => rpc('start_grain_tool').then(() => toast('Click parts in SketchUp; right-click to confirm.')).catch(showError);
     $('#doors_toggle').onclick = () => rpc('toggle_doors', [null, $('#door_angle').value]).then((r) => { toast(r.ok === false ? r.error : r.open ? 'Doors opened' : 'Doors closed'); loadViz(); }).catch(showError);
     $('#doors_click').onclick = () => rpc('start_door_tool').then(() => toast('Click a cabinet in SketchUp. Esc to finish.')).catch(showError);
     document.querySelectorAll('[data-viz]').forEach((b) => (b.onclick = () => rpc('set_visualization', [b.dataset.viz]).then((r) => { S.viz = r; paintViz(); toast('View: ' + r.modes[r.mode]); }).catch(showError)));

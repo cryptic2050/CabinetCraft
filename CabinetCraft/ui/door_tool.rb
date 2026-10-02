@@ -47,8 +47,8 @@ module CabinetCraft
         ph = view.pick_helper
         ph.do_pick(x, y)
         path = ph.path_at(0) || []
-        group = path.find { |e| e.respond_to?(:get_attribute) && !e.get_attribute(CABINET_DICT, 'cabinet_id').to_s.empty? }
-        group&.get_attribute(CABINET_DICT, 'cabinet_id')
+        group = path.find { |e| e.respond_to?(:get_attribute) && !e.get_attribute(Scene::CABINET_DICT, 'cabinet_id').to_s.empty? }
+        group&.get_attribute(Scene::CABINET_DICT, 'cabinet_id')
       end
     end
   end

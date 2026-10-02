@@ -3,6 +3,7 @@
 require 'json'
 require_relative 'controller'
 require_relative 'door_tool'
+require_relative 'grain_tool'
 
 module CabinetCraft
   # NOTE: named Interface (not UI) so it never shadows SketchUp's ::UI module.
@@ -51,6 +52,11 @@ module CabinetCraft
         end
 
         # Menu entry: runs the in-model API self test and shows the result in a message box.
+        def start_grain_tool
+          @instance ||= new
+          @instance.start_grain_tool
+        end
+
         def start_door_tool
           @instance ||= new
           @instance.start_door_tool
@@ -95,6 +101,10 @@ module CabinetCraft
         @dialog.show
         attach_selection_observer
         attach_app_observer
+      end
+
+      def start_grain_tool
+        ::Sketchup.active_model.select_tool(GrainTool.new(@controller))
       end
 
       def start_door_tool
@@ -149,6 +159,7 @@ module CabinetCraft
         return export_with_dialog(id, Array(req['args']), dlg) if method == 'export'
         return open_studio_reply(id, dlg) if method == 'open_nest_studio'
         return door_tool_reply(id, dlg) if method == 'start_door_tool'
+        return grain_tool_reply(id, dlg) if method == 'start_grain_tool'
 
         unless Controller::PUBLIC_METHODS.include?(method)
           return reply(id, { 'ok' => false, 'error' => "Unknown method #{method}" }, dlg)
@@ -157,6 +168,11 @@ module CabinetCraft
         reply(id, { 'ok' => true, 'result' => @controller.public_send(method, *Array(req['args'])) }, dlg)
       rescue StandardError => e
         reply(id, { 'ok' => false, 'error' => "#{e.class}: #{e.message}" }, dlg)
+      end
+
+      def grain_tool_reply(id, dlg)
+        start_grain_tool
+        reply(id, { 'ok' => true, 'result' => { 'started' => true } }, dlg)
       end
 
       def door_tool_reply(id, dlg)

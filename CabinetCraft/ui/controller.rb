@@ -65,7 +65,7 @@ module CabinetCraft
                           assembly_state explode_cabinet assemble_cabinet plan_run create_run runs_state restretch_run unlink_run
                           plan_corner create_corner_layout layouts_state unlink_layout restretch_layout change_layout_corner dashboard_state
                           production_state set_part_stage set_cabinet_stage set_sheet_stage
-                          repair_run add_to_run remove_from_run visualization_state set_visualization toggle_doors doors_state
+                          repair_run add_to_run remove_from_run visualization_state set_visualization toggle_doors doors_state grain_sets_state assign_grain_set assign_selected_grain_set clear_grain_sets
                           machining_state set_machining_setting add_pattern delete_pattern select_machine save_machine
                           delete_machine save_post delete_post cnc_check cnc_preview match_nesting_to_router].freeze
 
