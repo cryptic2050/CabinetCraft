@@ -56,7 +56,7 @@ module CabinetCraft
                           assembly_state explode_cabinet assemble_cabinet plan_run create_run runs_state restretch_run unlink_run
                           plan_corner create_corner_layout layouts_state unlink_layout restretch_layout dashboard_state
                           machining_state set_machining_setting add_pattern delete_pattern select_machine save_machine
-                          delete_machine save_post delete_post cnc_check cnc_preview].freeze
+                          delete_machine save_post delete_post cnc_check cnc_preview match_nesting_to_router].freeze
 
       # kind => [formats]. 'project' is JSON only.
       EXPORTS = { 'parts' => %w[csv excel_csv json pdf], 'cutting_list' => %w[csv excel_csv json pdf],
@@ -293,7 +293,14 @@ module CabinetCraft
 
       def set_hardware_price(id, price)
         Hardware.config.set_price(id, price)
+        save_hardware_config
         hardware_state
+      end
+
+      # This machine's hardware data was just edited on purpose: store it in the model so the model carries it.
+      def save_hardware_config
+        in_operation('CabinetCraft: Hardware settings', reidentify: false) { snapshot_hardware }
+        @hardware_conflicts = []
       end
 
       # --- Assembly documentation --------------------------------------------------------------
@@ -652,11 +659,35 @@ module CabinetCraft
       # Restores custom materials stored in the model that this machine does not have yet.
       def sync_materials
         added = Material.config.import_missing(project_store.materials_snapshot)
+        sync_hardware
         added
       end
 
-      def snapshot_materials
+      # Materials and hardware both travel with the model, so the two snapshots are always written together.
+      # import: true first takes in what the model already carries, so writing a snapshot never drops it. Deliberate edits of the
+      # material library (save / delete / reset) pass false: importing there would bring back the very thing the user just removed.
+      def snapshot_materials(import: true)
+        import ? sync_materials : sync_hardware
         project_store.materials_snapshot = Material.config.snapshot
+        snapshot_hardware
+      end
+
+      def sync_hardware
+        res = Hardware.config.import_missing(project_store.hardware_snapshot)
+        @hardware_conflicts = res['conflicts']
+        res['added']
+      end
+
+      def snapshot_hardware
+        project_store.hardware_snapshot = Hardware.config.snapshot
+      end
+
+      # Warnings about hardware data that differs between this machine and the model (ids that mean something else, other placement rules).
+      def hardware_config_issues
+        msgs = (@hardware_conflicts || []).dup
+        diff = Hardware.config.differences(project_store.hardware_snapshot)
+        msgs << "This machine's #{diff.join(' and ')} differ from the ones this model was last saved with: hardware lists may change (HARDWARE tab)" if diff.any?
+        msgs.map { |m| Validation::Validator.issue(:warning, 'hardware_config', m) }
       end
 
       def material_users(id)
@@ -676,7 +707,7 @@ module CabinetCraft
       def save_material(raw)
         mat = Material.config.save(raw)
         regenerated = regenerate(material_users(mat.id), 'CabinetCraft: Edit material')
-        snapshot_materials
+        snapshot_materials(import: false)
         materials_state.merge('saved_id' => mat.id, 'regenerated' => regenerated)
       end
 
@@ -685,13 +716,13 @@ module CabinetCraft
         raise ArgumentError, "In use by #{users.map { |_, c| c.label }.join(', ')} - change those cabinets first" unless users.empty?
 
         Material.config.delete(id) or raise ArgumentError, 'Unknown material'
-        snapshot_materials
+        snapshot_materials(import: false)
         materials_state
       end
 
       def reset_material(id)
         regenerated = regenerate(material_users(id), 'CabinetCraft: Reset material') if Material.config.reset_override(id)
-        snapshot_materials
+        snapshot_materials(import: false)
         materials_state.merge('regenerated' => regenerated || 0)
       end
 
@@ -708,7 +739,8 @@ module CabinetCraft
       end
 
       def cutting_list
-        Manufacturing::CuttingList.build(project_cabinets)
+        cabs = project_cabinets
+        Manufacturing::CuttingList.build(cabs, nested: cabs.empty? ? nil : nest)
       end
 
       # Writes an export to `path`. Returns { 'ok' => true, 'path' => ..., 'bytes' => n }.
@@ -735,7 +767,7 @@ module CabinetCraft
         project = project_store.name
         case kind
         when 'parts' then Exporters::PdfReports.parts_list(Manufacturing::PartsList.build(cabs), project: project)
-        when 'cutting_list' then Exporters::PdfReports.cutting_list(Manufacturing::CuttingList.build(cabs), project: project)
+        when 'cutting_list' then Exporters::PdfReports.cutting_list(Manufacturing::CuttingList.build(cabs, nested: nest), project: project)
         when 'labels' then Exporters::PdfReports.labels(Manufacturing::Labels.build(cabs, project_name: project, qr: false), project: project)
         when 'nesting' then Exporters::PdfReports.nesting(nest, project: project)
         when 'costing' then Exporters::PdfReports.costing(cost_estimate, project: project)
@@ -751,12 +783,12 @@ module CabinetCraft
           Exporters::CsvExporter.render(rows, cols, excel: format == 'excel_csv')
         end
         case kind
-        when 'project' then Exporters::JsonExporter.project(cabs, Manufacturing::CuttingList.build(cabs))
+        when 'project' then Exporters::JsonExporter.project(cabs, Manufacturing::CuttingList.build(cabs, nested: cabs.empty? ? nil : nest))
         when 'parts'
           rows = Manufacturing::PartsList.build(cabs)
           format == 'json' ? Exporters::JsonExporter.data(rows) : csv.call(rows, Manufacturing::PartsList::COLUMNS)
         when 'cutting_list'
-          list = Manufacturing::CuttingList.build(cabs)
+          list = Manufacturing::CuttingList.build(cabs, nested: cabs.empty? ? nil : nest)
           rows = Manufacturing::CuttingList.flat_rows(list)
           format == 'json' ? Exporters::JsonExporter.data(list) : csv.call(rows, rows.first ? rows.first.keys.map { |k| [k, k] } : [])
         when 'nesting'
@@ -831,6 +863,19 @@ module CabinetCraft
                         'unplaced' => materials.sum { |m| m['unplaced'].size } } }
       end
 
+      # Makes the nesting gap (kerf + spacing) at least the router diameter and the trim at least its radius, so a program
+      # that cuts every part out cannot run into its neighbours or leave the sheet. Only widens: never reduces a setting.
+      def match_nesting_to_router
+        router = Manufacturing::Cnc.router_tool(machining_config.machine) or raise ArgumentError, 'The active machine has no router tool'
+        d = router['diameter'].to_f
+        cfg = Manufacturing::Nesting.normalize_settings(project_store.nest_settings)
+        spacing = [cfg['spacing'], d - cfg['kerf']].max
+        trim = [cfg['trim'], d / 2.0].max
+        raise ArgumentError, "Router diameter #{d} mm needs a nesting gap of #{d} mm, but spacing is limited to #{Manufacturing::Nesting::LIMITS['spacing'][1]} mm" if spacing > Manufacturing::Nesting::LIMITS['spacing'][1]
+
+        nest(cfg.merge('spacing' => spacing, 'trim' => trim)).merge('matched_router' => d)
+      end
+
       def nest_part(r)
         { 'uid' => r['part_uid'], 'part_id' => r['part_id'], 'name' => r['name'], 'length' => r['length'], 'width' => r['width'],
           'grain' => r['grain'], 'cabinet_label' => r['cabinet_label'] }
@@ -902,7 +947,7 @@ module CabinetCraft
       def validate
         cabs = project_cabinets
         nesting = cabs.empty? ? nil : nest
-        issues = Validation::Validator.run(cabs, nesting: nesting) + Scene::ModelChecker.run(model)
+        issues = Validation::Validator.run(cabs, nesting: nesting) + Scene::ModelChecker.run(model) + hardware_config_issues
         issues = issues.sort_by { |i| [i['severity'] == 'error' ? 0 : 1, i['cabinet_label'].to_s, i['code']] }
         { 'issues' => issues, 'summary' => Validation::Validator.summary(issues), 'not_checked' => Validation::Validator::NOT_CHECKED,
           'cabinet_count' => cabs.size }
@@ -1096,6 +1141,7 @@ module CabinetCraft
 
       def add_hardware(name, category, price = nil, supplier = nil)
         Hardware.config.add_custom(name: name, category: category, price: price, supplier: supplier)
+        save_hardware_config
         hardware_state
       end
 
@@ -1105,16 +1151,19 @@ module CabinetCraft
         raise ArgumentError, "In use by #{used.join(', ')} - change those cabinets first" unless used.empty?
 
         Hardware.config.delete_custom(id) or raise ArgumentError, 'Only custom hardware can be deleted'
+        save_hardware_config
         hardware_state
       end
 
       def set_hinge_rules(rows)
         Hardware.config.hinge_rules = rows
+        save_hardware_config
         hardware_state
       end
 
       def set_hardware_setting(key, value)
         Hardware.config.set_setting(key, value)
+        save_hardware_config
         hardware_state
       end
 

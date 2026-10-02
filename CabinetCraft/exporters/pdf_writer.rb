@@ -23,7 +23,7 @@ module CabinetCraft
       FONTS = { regular: 'F1', bold: 'F2', mono: 'F3' }.freeze
 
       def self.text_width_mm(text, size, font = :regular)
-        units = text.to_s.each_char.sum do |ch|
+        units = text.to_s.each_char.flat_map { |c| transliterate(c).chars }.sum do |ch|
           o = ch.ord
           if font == :mono then 600
           elsif o.between?(32, 126) then (font == :bold ? HELV_BOLD : HELV)[o - 32]
@@ -136,9 +136,30 @@ module CabinetCraft
         end
       end
 
+      # Readable stand-ins for common characters Windows-1252 cannot show.
+      TRANSLITERATE = { "\u2265" => '>=', "\u2264" => '<=', "\u2260" => '!=', "\u2192" => '->', "\u2190" => '<-', "\u2194" => '<->', "\u2248" => '~',
+                        "\u2205" => 'dia.', "\u03A9" => 'Ohm', "\u00B5" => "\u00B5", "\u03BC" => "\u00B5", "\u0141" => 'L', "\u0142" => 'l',
+                        "\u2713" => 'ok', "\u2715" => 'x', "\u2212" => '-', "\u2011" => '-', "\u2010" => '-', "\u00A0" => ' ' }.freeze
+
+      # One character as Windows-1252 text: itself, an accent-stripped form, a table entry, or '?'.
+      def self.transliterate(ch)
+        ch.encode('Windows-1252')
+        ch
+      rescue EncodingError
+        return TRANSLITERATE[ch] if TRANSLITERATE.key?(ch)
+
+        base = ch.unicode_normalize(:nfd)[0]
+        begin
+          base.encode('Windows-1252')
+          base
+        rescue EncodingError
+          '?'
+        end
+      end
+
       def self.encode(str)
-        s = str.to_s.gsub(/[\u0000-\u001f]/, ' ').encode('Windows-1252', invalid: :replace, undef: :replace, replace: '?')
-        s.b.gsub(/[\\()]/) { |c| "\\#{c}" }
+        clean = str.to_s.gsub(/[\u0000-\u001f]/, ' ').each_char.map { |ch| transliterate(ch) }.join
+        clean.encode('Windows-1252', invalid: :replace, undef: :replace, replace: '?').b.gsub(/[\\()]/) { |c| "\\#{c}" }
       end
 
       attr_reader :pages

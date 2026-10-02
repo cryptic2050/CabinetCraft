@@ -60,6 +60,15 @@ module CabinetCraft
         @model.set_attribute(DICT, 'templates_snapshot', JSON.generate(hash))
       end
 
+      # Custom hardware, unit prices and placement rules used by this model, so it opens correctly on another machine.
+      def hardware_snapshot
+        read_json('hardware_snapshot')
+      end
+
+      def hardware_snapshot=(hash)
+        @model.set_attribute(DICT, 'hardware_snapshot', JSON.generate(hash))
+      end
+
       # Costing inputs are per project (prices change quote by quote).
       def cost_settings
         read_json('cost_settings')

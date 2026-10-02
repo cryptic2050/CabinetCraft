@@ -1781,3 +1781,179 @@ class TestDashboardScene < Minitest::Test
     assert_operator d['issues']['errors'], :>=, 1
   end
 end
+
+class TestHardwarePortability < Minitest::Test
+  def setup
+    Sketchup.reset_model!
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    @c = CabinetCraft::Interface::Controller.new
+    @model = Sketchup.active_model
+  end
+
+  def other_machine
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new # a fresh machine: no custom items, no prices
+    @c2 = CabinetCraft::Interface::Controller.new
+  end
+
+  def test_custom_items_and_prices_travel_with_the_model
+    h = @c.add_hardware('Brass pull', 'handle', 4.5, 'Acme')['library'].find { |i| i['name'] == 'Brass pull' }
+    @c.set_hardware_price('hinge_soft_close', 3.25)
+    @c.create('base_single_door', 'handle_type' => h['id'], 'hinge_type' => 'hinge_soft_close')
+    other_machine
+    assert_nil CabinetCraft::Hardware.find(h['id'])
+    @c2.bootstrap # opening the model on the other machine
+    st = @c2.hardware_state
+    assert_equal 'Brass pull', CabinetCraft::Hardware.find(h['id']).name
+    assert_equal 3.25, CabinetCraft::Hardware.price_of('hinge_soft_close')
+    est = @c2.cost_estimate
+    refute(est['warnings'].any? { |w| w =~ /Unknown hardware/ })
+    assert(@c2.list['cabinets'].any?)
+    assert_empty @c2.validate['issues'].select { |i| i['code'] == 'hardware_config' }
+    refute_nil st
+  end
+
+  def test_local_prices_win_over_the_models
+    @c.set_hardware_price('hinge_standard', 9)
+    @c.create('base_single_door', {})
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    CabinetCraft::Hardware.config.set_price('hinge_standard', 2)
+    c2 = CabinetCraft::Interface::Controller.new
+    c2.bootstrap
+    assert_equal 2.0, CabinetCraft::Hardware.price_of('hinge_standard')
+  end
+
+  def test_an_id_that_means_something_else_is_a_warning_not_a_silent_swap
+    @c.add_hardware('Brass pull', 'handle')
+    @c.create('base_single_door', {})
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    CabinetCraft::Hardware.config.add_custom(name: 'Chrome knob', category: 'handle')
+    c2 = CabinetCraft::Interface::Controller.new
+    c2.parts_list
+    msgs = c2.validate['issues'].select { |i| i['code'] == 'hardware_config' }.map { |i| i['message'] }
+    assert_equal 1, msgs.size
+    assert_match(/custom_1.*Brass pull.*Chrome knob/, msgs.first)
+    assert_equal 'Chrome knob', CabinetCraft::Hardware.find('custom_1').name # the local item is untouched
+  end
+
+  def test_different_placement_rules_are_reported
+    @c.create('base_single_door', {})
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    CabinetCraft::Hardware.config.set_setting('hinge_inset', 80)
+    c2 = CabinetCraft::Interface::Controller.new
+    c2.parts_list
+    issue = c2.validate['issues'].find { |i| i['code'] == 'hardware_config' }
+    assert_match(/placement settings \(hinge_inset\)/, issue['message'])
+    c2.set_hardware_setting('hinge_inset', 90) # editing here makes this machine's rules the model's
+    assert_empty c2.validate['issues'].select { |i| i['code'] == 'hardware_config' }
+  end
+
+  def test_corrupt_snapshots_are_ignored
+    @model.set_attribute('CabinetCraft_Project', 'hardware_snapshot', '{"custom":[{"id":"x"},{"id":"custom_1","category":"zzz","name":"n"},5,{"id":"custom_2","category":"handle","name":"ok","price":-3}],"prices":{"hinge_standard":"abc","nope":1,"dowel":-1},"settings":5}')
+    @c.bootstrap
+    assert_equal ['ok'], CabinetCraft::Hardware.config.custom_items.map(&:name) # only the valid entry, with its bad price dropped
+    assert_nil CabinetCraft::Hardware.config.custom_items.first.price
+    assert_nil CabinetCraft::Hardware.price_of('dowel')
+    @model.set_attribute('CabinetCraft_Project', 'hardware_snapshot', 'garbage')
+    assert_equal({ 'cabinets' => [] }, @c.list.slice('cabinets').tap { @c.bootstrap }) # garbage never breaks opening the model
+  end
+end
+
+class TestNestingRouterMatch < Minitest::Test
+  def setup
+    Sketchup.reset_model!
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    CabinetCraft::MachiningConfig.current = CabinetCraft::MachiningConfig.new
+    @c = CabinetCraft::Interface::Controller.new
+    @c.create('base_double_door', {})
+    @c.create('base_drawer_3', {})
+  end
+
+  def kerf_errors
+    @c.cnc_check['issues'].select { |i| i['code'] == 'cnc_kerf_too_small' }
+  end
+
+  def test_a_new_project_fails_the_router_check_and_one_call_fixes_it
+    assert_operator kerf_errors.size, :>, 0
+    r = @c.match_nesting_to_router
+    assert_equal 8.0, r['matched_router']
+    assert_equal [4.0, 4.0, 10.0], r['settings'].values_at('kerf', 'spacing', 'trim') # gap = kerf + spacing = router diameter
+    assert_empty kerf_errors
+    assert @c.cnc_check['exportable']
+    refute(@c.cnc_check['issues'].any? { |i| i['code'] == 'cnc_outside_sheet' })
+  end
+
+  def test_it_only_widens_and_is_idempotent
+    @c.nest('kerf' => 6, 'spacing' => 5, 'trim' => 20)
+    before = @c.nest['settings'].values_at('kerf', 'spacing', 'trim')
+    assert_equal before, @c.match_nesting_to_router['settings'].values_at('kerf', 'spacing', 'trim')
+    a = @c.match_nesting_to_router['settings']
+    assert_equal a, @c.match_nesting_to_router['settings']
+  end
+
+  def test_a_trim_smaller_than_the_router_radius_is_raised
+    @c.nest('kerf' => 4, 'spacing' => 4, 'trim' => 1)
+    assert_equal 4.0, @c.match_nesting_to_router['settings']['trim']
+  end
+
+  def test_the_dashboard_readiness_improves_after_matching
+    before = @c.dashboard_state['checks'].find { |k| k['id'] == 'cnc' }['status']
+    @c.match_nesting_to_router
+    after = @c.dashboard_state['checks'].find { |k| k['id'] == 'cnc' }['status']
+    assert_equal 'error', before
+    refute_equal 'error', after
+  end
+end
+
+class TestCuttingListUsesNesting < Minitest::Test
+  def setup
+    Sketchup.reset_model!
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    CabinetCraft::Material.config = CabinetCraft::MaterialConfig.new
+    @c = CabinetCraft::Interface::Controller.new
+    4.times { @c.create('base_double_door', {}) }
+  end
+
+  def test_sheet_counts_equal_the_nesting
+    list = @c.cutting_list
+    nest = @c.nest
+    list['materials'].each do |m|
+      n = nest['materials'].find { |x| x['material'] == m['material'] }
+      assert_equal n['total_sheets'], m['estimated_sheets'], m['material']
+      assert_equal 'nested', m['sheet_basis']
+      assert_operator m['area_estimate_sheets'], :>=, 1
+    end
+    assert_match(/current nesting/, list['estimate_note'])
+  end
+
+  def test_nesting_settings_change_the_cutting_list_count
+    before = @c.cutting_list['materials'].find { |m| m['material'] == '18mm MDF' }['estimated_sheets']
+    @c.nest('kerf' => 10, 'trim' => 50, 'spacing' => 50)
+    after = @c.cutting_list['materials'].find { |m| m['material'] == '18mm MDF' }['estimated_sheets']
+    assert_operator after, :>, before
+  end
+
+  def test_cost_and_reports_agree_on_sheets
+    @c.set_hardware_price('hinge_standard', 1)
+    CabinetCraft::Material.config.save('id' => 'mdf_18', 'price' => 50)
+    est = @c.cost_estimate
+    sheets = @c.cutting_list['materials'].find { |m| m['material'] == '18mm MDF' }
+    assert_equal sheets['estimated_sheets'], est['materials'].find { |m| m['material'] == '18mm MDF' }['sheets']
+    assert_equal (sheets['estimated_sheets'] * 50.0).round(2), sheets['estimated_cost']
+  end
+
+  def test_the_pdf_says_where_the_sheet_count_comes_from
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, 'c.pdf')
+      @c.export('cutting_list', 'pdf', path)
+      bytes = File.binread(path)
+      assert_includes bytes, 'from the nesting'.b
+      refute_includes bytes, 'about 1 sheet'.b
+    end
+  end
+
+  def test_empty_project_still_works
+    Sketchup.reset_model!
+    e = CabinetCraft::Interface::Controller.new.cutting_list
+    assert_equal 0, e['part_count']
+  end
+end

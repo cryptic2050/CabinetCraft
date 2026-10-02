@@ -47,7 +47,7 @@ module CabinetCraft
         list['materials'].each do |m|
           r.heading(m['material'], size: 11)
           cost = m['estimated_cost'] ? "  |  about #{m['estimated_cost']} at #{m['price']} per sheet" : ''
-          r.paragraph("#{m['part_count']} parts  |  #{m['area_m2']} m2  |  sheet #{num(m['sheet_length'])} x #{num(m['sheet_width'])}  |  about #{m['estimated_sheets']} sheet#{m['estimated_sheets'] == 1 ? '' : 's'} (#{num(m['waste_pct'])}% waste)#{cost}")
+          r.paragraph("#{m['part_count']} parts  |  #{m['area_m2']} m2  |  sheet #{num(m['sheet_length'])} x #{num(m['sheet_width'])}  |  #{m['sheet_basis'] == 'nested' ? '' : 'about '}#{m['estimated_sheets']} sheet#{m['estimated_sheets'] == 1 ? '' : 's'} (#{m['sheet_basis'] == 'nested' ? 'from the nesting' : "#{num(m['waste_pct'])}% waste"})#{cost}")
           r.table([left('Part', 30), right('Length', 15), right('Width', 15), right('Qty', 10), left('Grain', 22), left('Edge banding', 38), left('Cabinets', 32)],
                   m['groups'].map { |g| [g['name'], num(g['length']), num(g['width']), g['qty'].to_s, GRAIN.fetch(g['grain'], g['grain']), g['edge_text'], g['cabinets']] })
         end

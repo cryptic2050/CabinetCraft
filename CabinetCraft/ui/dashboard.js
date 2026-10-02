@@ -352,7 +352,7 @@
     const c = S.cutting; const v = $('#view'); if (S.tab !== 'reports' || !c) return;
     if (!c.part_count) { v.innerHTML = '<h2>CUTTING LIST</h2><div class="card"><h3>Nothing to report</h3><p>No cabinets in the model yet.</p></div>'; return; }
     const mats = c.materials.map((m) => `<div class="card"><h3>${esc(m.material)}</h3>
-      <p>${m.part_count} parts &middot; ${m.area_m2} m&sup2; &middot; sheet ${fmt(m.sheet_length)} x ${fmt(m.sheet_width)} ${S.unit} &middot; about <b>${m.estimated_sheets}</b> sheet${m.estimated_sheets === 1 ? '' : 's'} (estimate, ${m.waste_pct}% waste)${m.estimated_cost != null ? ` &middot; <b>${m.estimated_cost}</b> at ${m.price}/sheet` : ''}</p>
+      <p>${m.part_count} parts &middot; ${m.area_m2} m&sup2; &middot; sheet ${fmt(m.sheet_length)} x ${fmt(m.sheet_width)} ${S.unit} &middot; ${m.sheet_basis === 'nested' ? '' : 'about '}<b>${m.estimated_sheets}</b> sheet${m.estimated_sheets === 1 ? '' : 's'} (${m.sheet_basis === 'nested' ? 'from the nesting' : `estimate, ${m.waste_pct}% waste`})${m.estimated_cost != null ? ` &middot; <b>${m.estimated_cost}</b> at ${m.price}/sheet` : ''}</p>
       <table><thead><tr><th>PART</th><th>LENGTH</th><th>WIDTH</th><th>QTY</th><th>GRAIN</th><th>EDGES</th><th>CABINETS</th></tr></thead><tbody>
       ${m.groups.map((g) => `<tr><td>${esc(g.name)}</td><td class="num">${fmt(g.length)}</td><td class="num">${fmt(g.width)}</td><td class="num"><b>${g.qty}</b></td><td>${GRAIN[g.grain]}</td><td>${esc(g.edge_text)}</td><td class="mute">${esc(g.cabinets)}</td></tr>`).join('')}</tbody></table></div>`).join('');
     const bands = c.edge_banding.length ? `<div class="card"><table>${c.edge_banding.map((b) => `<tr><td>${b.thickness} mm band</td><td class="num">${b.length_m} m</td></tr>`).join('')}</table></div>` : '<p class="mute">No edge banding.</p>';
@@ -537,7 +537,7 @@
       <h2>CHECK &amp; EXPORT</h2><div class="card"><div class="row" style="margin-bottom:8px"><span class="mute">Program for</span>
       ${sel('c_face', [['a', 'Face A up (drills + cuts parts out)'], ['b', 'Face B up (underside drilling only)']], S.cncFace)}</div>
       <span class="status ${chk.errors ? 'err' : chk.warnings ? 'warn' : 'ok'}">${chk.errors ? chk.errors + ' ERROR' + (chk.errors > 1 ? 'S' : '') : chk.warnings ? chk.warnings + ' WARNING' + (chk.warnings > 1 ? 'S' : '') : 'READY'}</span>
-      ${issueList(chk.issues)}
+      ${issueList(chk.issues)}${chk.issues.some((i) => i.code === 'cnc_kerf_too_small' || i.code === 'cnc_outside_sheet') ? '<div class="row" style="margin:8px 0"><button class="primary" id="c_match">Match nesting to the router</button><span class="mute">Widens the nesting gap to the router diameter and the trim to its radius, then re-nests.</span></div>' : ''}
       <div class="row" style="margin:10px 0"><button class="primary" data-export="${S.cncFace === 'a' ? 'gcode' : 'gcode_b'}" data-format="nc" ${chk.exportable ? '' : 'disabled'}>G-CODE</button>
       <button class="ghost" data-export="dxf" data-format="dxf">DXF</button><button class="ghost" data-export="svg" data-format="svg">SVG</button>
       <button class="ghost" data-export="machining" data-format="csv">Machining CSV</button><button class="ghost" data-export="machining" data-format="json">JSON</button></div>
@@ -568,6 +568,7 @@
       <button class="primary" id="pt_add">Add pattern</button></div>`;
     bindExports();
     $('#c_face').onchange = (e) => { S.cncFace = e.target.value; loadCnc(); };
+    const mt = $('#c_match'); if (mt) mt.onclick = () => rpc('match_nesting_to_router').then((r) => { toast(`Nesting gap set for the \u00D8${r.matched_router} mm router`); loadCnc(); }).catch(showError);
     if ($('#c_mat')) $('#c_mat').onchange = (e) => { S.cncMat = e.target.value; S.cncSheet = 0; loadCncPreview(); };
     if ($('#c_sheet')) $('#c_sheet').onchange = (e) => { S.cncSheet = Math.max(0, parseInt(e.target.value, 10) - 1); loadCncPreview(); };
     $('#m_pick').onchange = (e) => cncCall('select_machine', [e.target.value], 'Machine selected');

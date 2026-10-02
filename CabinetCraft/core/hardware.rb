@@ -159,6 +159,54 @@ module CabinetCraft
         @hinge_rules.select { |r| r['min_height'] <= height }.last['count']
       end
 
+      # What a model needs to open correctly on another machine: custom items, unit prices and the placement rules it was built with.
+      def snapshot
+        { 'custom' => @custom.map(&:to_h), 'prices' => @prices.dup, 'hinge_rules' => @hinge_rules.map(&:dup), 'settings' => @settings.dup }
+      end
+
+      # Adds custom items and prices from a model snapshot that this machine does not have. Never overwrites anything local: an id that
+      # already means something else here is reported as a conflict. The snapshot is untrusted (it comes from a model file).
+      # => { 'added' => n, 'conflicts' => [message] }
+      def import_missing(snapshot)
+        added = 0
+        conflicts = []
+        snap = snapshot.is_a?(Hash) ? snapshot : {}
+        Array(snap['custom']).each do |h|
+          next unless h.is_a?(Hash) && h['id'].to_s.match?(/\Acustom_\d+\z/) && CATEGORIES.key?(h['category']) && !h['name'].to_s.strip.empty?
+
+          local = @custom.find { |i| i.id == h['id'] }
+          if local
+            conflicts << "Hardware '#{h['id']}' is '#{h['name']}' in this model but '#{local.name}' on this machine" if local.name != h['name'].to_s.strip
+            next
+          end
+          price = h['price'].is_a?(Numeric) && h['price'] >= 0 ? h['price'].to_f : nil
+          @custom << Item.new(id: h['id'], name: h['name'].to_s.strip[0, 80], category: h['category'], price: price,
+                              supplier: h['supplier'].to_s.strip[0, 80].then { |x| x.empty? ? nil : x }, custom: true, companions: {})
+          added += 1
+        end
+        (snap['prices'].is_a?(Hash) ? snap['prices'] : {}).each do |id, v|
+          next if @prices.key?(id) || !(v.is_a?(Numeric) && v >= 0 && v <= 1_000_000) || !(BUILT_IN.any? { |i| i.id == id } || @custom.any? { |i| i.id == id })
+
+          @prices[id] = v.to_f
+          added += 1
+        end
+        save if added.positive?
+        { 'added' => added, 'conflicts' => conflicts }
+      end
+
+      # Human-readable differences between this machine's placement rules and the ones a model was saved with.
+      def differences(snapshot)
+        snap = snapshot.is_a?(Hash) ? snapshot : {}
+        out = []
+        theirs = snap['hinge_rules']
+        out << 'hinge rules' if theirs.is_a?(Array) && !theirs.empty? && theirs.map { |r| [r['min_height'].to_f, r['count'].to_i] } != @hinge_rules.map { |r| [r['min_height'], r['count']] }
+        if snap['settings'].is_a?(Hash)
+          changed = DEFAULT_SETTINGS.keys.select { |k| snap['settings'].key?(k) && snap['settings'][k].to_f != @settings[k].to_f }
+          out << "placement settings (#{changed.join(', ')})" if changed.any?
+        end
+        out
+      end
+
       private
 
       def save

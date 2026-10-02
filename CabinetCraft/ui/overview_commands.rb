@@ -8,7 +8,7 @@ module CabinetCraft
         cabs = project_cabinets
         with_nest_memo do
           nesting = cabs.empty? ? nil : nest
-          issues = (cabs.empty? ? [] : Validation::Validator.run(cabs, nesting: nesting)) + Scene::ModelChecker.run(model)
+          issues = (cabs.empty? ? [] : Validation::Validator.run(cabs, nesting: nesting)) + Scene::ModelChecker.run(model) + hardware_config_issues
           issues = issues.sort_by { |i| [i['severity'] == 'error' ? 0 : 1, i['cabinet_label'].to_s, i['code']] }
           Manufacturing::Dashboard.build(
             project: project_store.name, cabinets: cabs, type_names: Library.entries.to_h { |e| [e['type'], e['name']] }, nesting: nesting,

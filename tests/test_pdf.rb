@@ -74,6 +74,10 @@ class TestPdf < Minitest::Test
     assert_equal 'a\\(b\\)c\\\\d'.b, Doc.encode('a(b)c\\d')
     assert_equal "\xD8".b, Doc.encode('Ø') # Windows-1252 byte for O-slash
     assert_equal '?', Doc.encode('木')
+    assert_equal 'width >= 600 -> ok'.b, Doc.encode("width \u2265 600 \u2192 \u2713")
+    assert_equal "z\xF3lc".b, Doc.encode("\u017C\u00F3\u0142\u0107") # z-dot -> z, o-acute kept (it is in Windows-1252), l-stroke -> l, c-acute -> c
+    assert_equal "Caf\xE9".b, Doc.encode("Caf\u00E9")
+    assert_equal 'dia. 8'.b, Doc.encode("\u2205 8")
     assert_equal 'a b', Doc.encode("a\nb")
   end
 
