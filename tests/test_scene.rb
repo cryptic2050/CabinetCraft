@@ -22,7 +22,7 @@ class TestScene < Minitest::Test
   end
 
   def test_create_builds_cabinet_group_with_exact_panel_geometry
-    res = @c.create('base_cabinet', 'width' => 600, 'height' => 757, 'depth' => 562, 'shelf_count' => 1)
+    res = @c.create('base_cabinet', 'width' => 600, 'height' => 757, 'depth' => 562, 'shelf_count' => 1, 'door_count' => 0)
     assert res['created'], res.inspect
     group = cabinet_groups.first
     assert_equal res['panels'].size, group.entities.grep(Sketchup::Group).size
@@ -138,5 +138,28 @@ class TestScene < Minitest::Test
       assert_raises(RuntimeError) { @c.create('base_cabinet', {}) }
     end
     assert_equal [:abort], @model.ops.last
+  end
+
+  def test_phase2_preset_geometry_and_front_to_drawer_switch
+    res = @c.create('base_door_drawer', {})
+    assert res['created'], res.inspect
+    group = cabinet_groups.first
+    b = group.bounds
+    assert_in_delta 800, mm(b.max.x - b.min.x), 1e-6
+    assert_in_delta 820, mm(b.max.z - b.min.z), 1e-6
+    assert_in_delta 562 + 18, mm(b.max.y - b.min.y), 1e-6 # doors sit in front of the carcass depth
+    names = group.entities.grep(Sketchup::Group).map(&:name)
+    %w[B01-DOOR_1 B01-DOOR_2 B01-DRAWER_1_FRONT B01-DRAWER_1_BOTTOM B01-ZONE_SHELF B01-TOE_KICK].each { |n| assert_includes names, n }
+
+    cab = res['cabinet']
+    up = @c.update(cab['id'], cab['params'].merge('door_count' => 0, 'drawer_count' => 4, 'shelf_count' => 0))
+    assert up['updated'], up.inspect
+    names = group.entities.grep(Sketchup::Group).map(&:name)
+    assert_equal 4, names.count { |n| n.match?(/DRAWER_\d_FRONT\z/) }
+    refute(names.any? { |n| n.include?('DOOR') })
+    refute_includes names, 'B01-ZONE_SHELF'
+    assert_equal 1, group.made_unique
+    ids = names.dup
+    assert_equal ids.uniq, ids
   end
 end

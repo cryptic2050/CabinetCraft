@@ -1,6 +1,10 @@
-# CabinetCraft Pro (Phase 1)
+# CabinetCraft Pro (Phase 1 + 2)
 
 Parametric cabinet design to manufacturing data inside SketchUp. Original code; not derived from any other plugin.
+
+**Phase 2 adds** slab doors, drawers (front + box), toe kick, vertical dividers and per-compartment shelves, plus presets
+(single/double door, 3/4 drawer, drawer-over-door, open shelf). Doors and drawer fronts sit in front of the carcass depth `D`,
+and overall height `H` includes the toe kick.
 
 **Phase 1 delivers:** the extension skeleton, dashboard, one parametric **base cabinet** (bottom, sides, back, rails,
 shelves), a rule-based dimension engine, stable IDs + attribute metadata, and live regeneration of just the edited cabinet.
@@ -18,7 +22,7 @@ Open it from the **CabinetCraft Pro** toolbar button or *Extensions > CabinetCra
 
 ## Use
 
-1. CABINETS > *Configure & create* on "Base cabinet".
+1. CABINETS > *Configure & create* on a base cabinet preset.
 2. PARAMETERS: set width/height/depth etc. (defaults 600 x 757 x 562), press **CREATE**.
 3. Edit any value afterwards: only that cabinet is regenerated (one Undo step per change). Select a cabinet in the model to edit it.
 4. PARTS shows the generated panels and dimensions.
@@ -43,4 +47,9 @@ the generator, registry, controller, undo operations and duplicate-ID repair.
 * Only top-level groups are scanned for cabinets; making a cabinet a Component or nesting it in another group is unsupported.
 * Back-panel Z/Y positions and the rule constants in `core/construction.rb` are my assumptions (the brief gave results, not rules); confirm them against your factory standard.
 * Selection sync is bound to the model open when the dialog opened (re-open the dialog after switching models on macOS).
-* Doors/drawers/toe kick, overrides, materials editing, and everything in Phases 2-6 are not implemented.
+* Doors are plain slab doors only; no profiles (shaker, raised panel, glass), no hinges or handles, no opening direction.
+* Drawer boxes are simple 5-panel boxes (bottom under the walls); no runner hardware data or grooves yet. Box depth snaps down to a multiple of 50 mm.
+* Toe kick is a single plinth board; no legs or brackets.
+* Dividers span only the door/open zone; shelves are evenly spaced and the same count in every compartment.
+* Rule constants for drawers (clearance 13 mm, box lift 10 mm, height deduction 40 mm, 50 mm depth steps) are my assumptions - check them against your runners.
+* Manual dimension overrides, editable materials and everything in Phases 3-6 are not implemented.

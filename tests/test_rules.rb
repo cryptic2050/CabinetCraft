@@ -143,7 +143,7 @@ class TestRules < Minitest::Test
               panels.each do |p|
                 assert_operator p.min_corner[0], :>=, -1e-6 if p.key != 'back'
                 assert_operator p.max_corner[0], :<=, w + 1e-6
-                assert_operator p.min_corner[1], :>=, -1e-6
+                assert_operator p.min_corner[1], :>=, -1e-6 unless %i[door drawer_front].include?(p.role)
                 assert_operator p.max_corner[1], :<=, pr['depth'] + 1e-6
                 assert_operator p.min_corner[2], :>=, -1e-6
               end

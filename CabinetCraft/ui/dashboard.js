@@ -185,8 +185,13 @@
     if (issues) issues.innerHTML = (p.issues || []).length ? `<ul class="issues">${p.issues.map((i) => `<li class="${i.severity}">${esc(i.message)}</li>`).join('')}</ul>` : '';
     if (calc && p.values && p.values.internal_width != null) {
       const v = p.values;
-      const rows = [['Internal width', v.internal_width], ['Side height', v.side_height], ['Back panel', `${fmt(v.back_width)} x ${fmt(v.back_height)}`],
-        ['Shelf', `${fmt(v.shelf_width)} x ${fmt(v.shelf_depth)}`], ['Door widths (calc only)', v.door_widths.map(fmt).join(' + ') || '-']];
+      const rows = [['Internal width', v.internal_width], ['Side height', v.side_height], ['Back panel', `${fmt(v.back_width)} x ${fmt(v.back_height)}`]];
+      if (v.open_zone) rows.push(['Shelf', v.shelf_count ? `${fmt(v.shelf_width)} x ${fmt(v.shelf_depth)}` : '-'], ['Compartment width', v.compartment_width]);
+      if (v.door_widths.length) rows.push(['Doors', `${v.door_widths.map(fmt).join(' + ')} x ${fmt(v.door_height)}`]);
+      if (v.drawer_fronts.length) {
+        rows.push(['Drawer fronts', v.drawer_fronts.map((f) => fmt(f.height)).join(' / ')],
+          ['Drawer box', `${fmt(v.drawer_box_width)} x ${fmt(v.drawer_box_depth)}`]);
+      }
       calc.innerHTML = `<div class="card"><table>${rows.map(([k, x]) => `<tr><td>${k}</td><td class="num">${typeof x === 'number' ? fmt(x) : x} ${typeof x === 'number' ? S.unit : ''}</td></tr>`).join('')}</table></div>`;
     }
     if (S.tab === 'parts') $('#view').innerHTML = partsView();

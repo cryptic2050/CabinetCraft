@@ -22,14 +22,25 @@ module CabinetCraft
         { 'key' => 'construction', 'label' => 'Construction', 'group' => 'CARCASS', 'type' => 'enum',
           'default' => Construction::DEFAULT,
           'options' => Construction::PROFILES.map { |id, p| { 'value' => id, 'label' => p[:name] } } },
-        { 'key' => 'shelf_count', 'label' => 'Shelves', 'group' => 'CARCASS', 'type' => 'int', 'default' => 1, 'min' => 0, 'max' => 10 },
+        { 'key' => 'shelf_count', 'label' => 'Shelves (per compartment)', 'group' => 'CARCASS', 'type' => 'int', 'default' => 1, 'min' => 0, 'max' => 10 },
+        { 'key' => 'divider_count', 'label' => 'Vertical dividers', 'group' => 'CARCASS', 'type' => 'int', 'default' => 0, 'min' => 0, 'max' => 4,
+          'note' => 'Dividers and shelves only exist in the open/door zone, not behind drawers.' },
         { 'key' => 'brace_depth', 'label' => 'Rail depth', 'group' => 'CARCASS', 'type' => 'length', 'default' => 100.0, 'min' => 40.0, 'max' => 300.0 },
-        { 'key' => 'door_count', 'label' => 'Door count', 'group' => 'FRONTS', 'type' => 'int', 'default' => 1, 'min' => 0, 'max' => 4,
-          'note' => 'Calculation only - 3D doors arrive in Phase 2.' },
-        { 'key' => 'door_reveal', 'label' => 'Outer reveal', 'group' => 'FRONTS', 'type' => 'length', 'default' => 1.5, 'min' => 0.0, 'max' => 10.0,
-          'note' => 'Calculation only - 3D doors arrive in Phase 2.' },
-        { 'key' => 'door_gap', 'label' => 'Gap between doors', 'group' => 'FRONTS', 'type' => 'length', 'default' => 3.0, 'min' => 0.0, 'max' => 10.0,
-          'note' => 'Calculation only - 3D doors arrive in Phase 2.' }
+        { 'key' => 'toe_kick_height', 'label' => 'Toe kick height', 'group' => 'BASE', 'type' => 'length', 'default' => 0.0, 'min' => 0.0, 'max' => 300.0,
+          'note' => '0 = no toe kick. Included in overall height.' },
+        { 'key' => 'toe_kick_depth', 'label' => 'Toe kick setback', 'group' => 'BASE', 'type' => 'length', 'default' => 50.0, 'min' => 0.0, 'max' => 150.0 },
+        { 'key' => 'door_count', 'label' => 'Door count', 'group' => 'FRONTS', 'type' => 'int', 'default' => 1, 'min' => 0, 'max' => 4 },
+        { 'key' => 'door_reveal', 'label' => 'Outer reveal', 'group' => 'FRONTS', 'type' => 'length', 'default' => 1.5, 'min' => 0.0, 'max' => 10.0 },
+        { 'key' => 'door_gap', 'label' => 'Gap between fronts', 'group' => 'FRONTS', 'type' => 'length', 'default' => 3.0, 'min' => 0.0, 'max' => 10.0 },
+        { 'key' => 'front_material', 'label' => 'Front material', 'group' => 'FRONTS', 'type' => 'enum', 'default' => 'mdf_18',
+          'options' => Material.carcass.map { |m| { 'value' => m.id, 'label' => m.name } } },
+        { 'key' => 'drawer_count', 'label' => 'Drawer count', 'group' => 'DRAWERS', 'type' => 'int', 'default' => 0, 'min' => 0, 'max' => 6,
+          'note' => 'Drawers sit at the top. With no doors they fill the full height equally.' },
+        { 'key' => 'drawer_front_height', 'label' => 'Drawer front height', 'group' => 'DRAWERS', 'type' => 'length', 'default' => 180.0, 'min' => 80.0, 'max' => 600.0,
+          'note' => 'Used only when doors and drawers are combined.' },
+        { 'key' => 'drawer_box_material', 'label' => 'Drawer box material', 'group' => 'DRAWERS', 'type' => 'enum', 'default' => 'mdf_16',
+          'options' => Material.carcass.map { |m| { 'value' => m.id, 'label' => m.name } } },
+        { 'key' => 'runner_clearance', 'label' => 'Runner clearance (per side)', 'group' => 'DRAWERS', 'type' => 'length', 'default' => 13.0, 'min' => 5.0, 'max' => 30.0 }
       ]
     end
 

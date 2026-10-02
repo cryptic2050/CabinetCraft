@@ -22,6 +22,18 @@ module CabinetCraft
   #   shelf_side_clearance   clearance per side between shelf and sides.
   #   min_shelf_gap          smallest allowed vertical opening between panels.
   module Construction
+    # Drawer-box rules shared by the built-in profiles.
+    #   drawer_rear_clearance      gap between drawer-box rear and back panel
+    #   drawer_step                box depth is rounded down to a multiple of this (runner lengths)
+    #   drawer_min_depth           shallowest drawer box allowed
+    #   drawer_box_lift            box bottom sits this far above the front's bottom edge
+    #   drawer_box_height_deduction  box height = front height - this
+    #   drawer_bottom_thickness    drawer bottom panel thickness
+    DRAWER_RULES = {
+      drawer_rear_clearance: 10.0, drawer_step: 50.0, drawer_min_depth: 250.0,
+      drawer_box_lift: 10.0, drawer_box_height_deduction: 40.0, drawer_bottom_thickness: 3.0
+    }.freeze
+
     PROFILES = {
       'standard' => {
         name: 'Standard (sides on bottom)',
@@ -36,7 +48,7 @@ module CabinetCraft
         shelf_rear_clearance: 20.0,
         shelf_side_clearance: 0.0,
         min_shelf_gap: 30.0
-      }.freeze,
+      }.merge(DRAWER_RULES).freeze,
       'spec_example' => {
         name: 'Specification example (757 -> 742)',
         description: 'Reproduces the dimensions in the product brief: 600x757x562 gives ' \
@@ -51,7 +63,7 @@ module CabinetCraft
         shelf_rear_clearance: 20.0,
         shelf_side_clearance: 0.0,
         min_shelf_gap: 30.0
-      }.freeze
+      }.merge(DRAWER_RULES).freeze
     }.freeze
 
     DEFAULT = 'standard'

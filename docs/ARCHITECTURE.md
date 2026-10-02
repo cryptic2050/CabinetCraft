@@ -35,6 +35,19 @@ parameters ──> Rules (dimension engine) ──> PanelGenerator ──> Panel
 `Controller#update` rebuilds **only the one cabinet group** that changed, inside one undo step, preserving its
 transform. No-op edits (identical parameters) do not touch the model.
 
+## Vertical layout and fronts (Phase 2)
+
+```
+z=0 .. toe          plinth board (set back toe_kick_depth)
+toe .. toe+t        bottom panel (full width), sides stand on it
+ top zone           drawers (full width; boxes run on runner_clearance each side)
+ fixed shelf        only when drawers AND doors are combined
+ lower zone         doors in front; shelves + vertical dividers inside
+doors / drawer fronts sit at y < 0 (in front of the carcass depth D)
+```
+Overall height H includes the toe kick. Door height = zone height - 2 reveals. Drawers-only cabinets split the carcass height
+equally. When drawers fill the cabinet, shelves/dividers are ignored *with a warning*.
+
 ## Folder layout
 
 ```
@@ -61,9 +74,15 @@ cabinetcraft/
 | 1 | Base cabinet generator (bottom, sides, back, rails, shelves) | IMPLEMENTED |
 | 1 | Rule engine, validation, door-width calculation, unit display switch | IMPLEMENTED |
 | 1 | Attribute metadata + stable IDs, live update of one cabinet | IMPLEMENTED |
-| 1 | 3D doors, drawers, toe kick, dividers | PLANNED (Phase 2) - door **widths** are calculated only |
-| 1 | Material editing, prices, custom materials | PLANNED (Phase 2) - library is read-only |
-| 1 | Manual dimension overrides ("AUTO" / "MANUAL OVERRIDE") | PLANNED (Phase 2). Part keys are stable so overrides can be keyed to them |
+| 2 | Slab doors (full overlay), widths from reveals/gaps, front material | IMPLEMENTED |
+| 2 | Drawers: fronts + 5-part boxes (front, back, 2 sides, bottom), equal split or drawers-over-doors | IMPLEMENTED (geometry and dimensions; runner *hardware* data is Phase 3) |
+| 2 | Toe kick (raises carcass, plinth board) | IMPLEMENTED (board only: no plinth legs/brackets) |
+| 2 | Vertical dividers, per-compartment shelves, fixed shelf under drawers | IMPLEMENTED |
+| 2 | Library presets (single/double door, 3/4 drawer, drawer-over-door, open shelf) | IMPLEMENTED (presets of one generator) |
+| 2 | Shaker / raised-panel / glass / aluminium doors, door-profile library | PLANNED - slab only |
+| 2 | Drawer slide types, hinge/handle placement | PLANNED (Phase 3 hardware) |
+| 1 | Material editing, prices, custom materials | PLANNED - library is read-only (not part of this Phase 2 slice) |
+| 1 | Manual dimension overrides ("AUTO" / "MANUAL OVERRIDE") | PLANNED (not yet built). Part keys are stable so overrides can be keyed to them |
 | 2-6 | hardware, edge banding, cutting list, nesting, labels/QR, validation suite, machining, DXF, CNC, templates, standards, costs, assembly | PLANNED |
 | - | All other library cabinets (wall, tall, wardrobe, vanity, TV, corner...) | PLANNED - listed, not selectable |
 | - | PLACEHOLDER | none: no control exists that does nothing |

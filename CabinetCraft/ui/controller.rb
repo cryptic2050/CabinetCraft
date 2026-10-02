@@ -40,9 +40,9 @@ module CabinetCraft
 
       # Pure calculation: no model changes. Drives the live panel table.
       def preview(type, raw, label = nil)
-        entry = Library.entry(type) or return failure("Unknown cabinet type '#{type}'")
-        _ = entry
-        params, errors = Parameter.coerce(raw)
+        Library.entry(type) or return failure("Unknown cabinet type '#{type}'")
+        # Preset defaults sit under whatever the caller supplies.
+        params, errors = Parameter.coerce(Library.defaults_for(type).merge((raw || {}).transform_keys(&:to_s)))
         return { 'ok' => false, 'params' => params, 'issues' => errors, 'panels' => [], 'values' => {} } unless errors.empty?
 
         cab = Cabinet.build(type: type, params: params, label: label || Scene::Registry.next_label(model))
