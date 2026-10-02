@@ -18,6 +18,7 @@ require_relative '../manufacturing/labels'
 require_relative '../manufacturing/machining'
 require_relative '../manufacturing/cnc'
 require_relative '../manufacturing/costing'
+require_relative '../core/run_planner'
 require_relative '../manufacturing/assembly'
 require_relative '../exporters/assembly_svg'
 require_relative '../exporters/dxf_exporter'
@@ -45,7 +46,7 @@ module CabinetCraft
                           library_state templates_state validate_template save_template delete_template install_example
                           save_preset delete_preset standards_state save_standards reset_standards
                           cost_state save_cost_settings set_hardware_price
-                          assembly_state explode_cabinet assemble_cabinet
+                          assembly_state explode_cabinet assemble_cabinet plan_run create_run
                           machining_state set_machining_setting add_pattern delete_pattern select_machine save_machine
                           delete_machine save_post delete_post cnc_check cnc_preview].freeze
 
@@ -343,6 +344,60 @@ module CabinetCraft
         dims = p['width'] && p['height'] && p['depth'] ? "#{p['width']} x #{p['height']} x #{p['depth']} mm (W x H x D)" : 'Custom template'
         { 'label' => cab.label, 'type_name' => names[cab.type] || cab.type, 'dims' => dims, 'steps' => d['steps'], 'parts' => d['parts'],
           'assembled' => d['assembled'], 'exploded' => d['exploded'] }
+      end
+
+      # --- Cabinet runs (Smart Space fill) ---------------------------------------------------------
+
+      # Pure calculation: widths for a row of cabinets along a wall of `length` mm. Nothing is changed in the model.
+      def plan_run(length, items)
+        list = run_items(items)
+        plan = RunPlanner.plan(length, list.map { |i| i.slice('fixed', 'width', 'min', 'max') })
+        plan.merge('items' => list.each_with_index.map { |i, n| { 'type' => i['type'], 'width' => plan['widths'][n], 'fixed' => i['fixed'] } })
+      rescue ArgumentError, TypeError => e
+        { 'ok' => false, 'widths' => [], 'issues' => [e.message], 'items' => [] }
+      end
+
+      # Creates the whole run in one undo step, left to right from the right-most existing cabinet. Nothing is created
+      # if any cabinet is invalid or the row does not fit. A leftover gap (cabinets at maximum width) is allowed and reported.
+      def create_run(length, items)
+        plan = plan_run(length, items)
+        raise ArgumentError, plan['issues'].first.to_s unless plan['ok']
+
+        list = run_items(items)
+        prepared = list.each_with_index.map do |it, n|
+          prev = preview(it['type'], (it['params'] || {}).merge('width' => plan['widths'][n]))
+          raise ArgumentError, "Cabinet #{n + 1} (#{it['type']}): #{prev['issues'].find { |i| i['severity'] == 'error' }&.fetch('message', nil) || 'invalid'}" unless prev['ok']
+
+          [it['type'], prev['params']]
+        end
+        created = []
+        in_operation('CabinetCraft: Create cabinet run', reidentify: false) do
+          reidentify_duplicates
+          x = Scene::Registry.next_x_mm(model)
+          prepared.each do |type, params|
+            cabinet = Cabinet.build(type: type, params: params, label: Scene::Registry.next_label(model))
+            Generators::CabinetGenerator.create(model.entities, cabinet, Geom::Transformation.new(Geom::Point3d.new(Units.to_sketchup(x), 0, 0)))
+            x += params['width']
+            created << cabinet.summary
+          end
+          snapshot_materials
+          snapshot_templates
+        end
+        { 'ok' => true, 'created' => created, 'plan' => plan }
+      end
+
+      def run_items(items)
+        raise ArgumentError, 'Add at least one cabinet to the run' unless items.is_a?(Array) && !items.empty?
+
+        items.map do |raw|
+          it = raw.transform_keys(&:to_s)
+          raise ArgumentError, "Unknown cabinet type '#{it['type']}'" unless Library.entry(it['type'])
+
+          if it['fixed'] && it['width'].to_s.strip.empty?
+            it['width'] = (it['params'] || {})['width'] || Library.defaults_for(it['type'])['width'] || Parameter.defaults['width']
+          end
+          it
+        end
       end
 
       # --- Factory standards -----------------------------------------------------------------------

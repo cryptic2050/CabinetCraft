@@ -113,3 +113,4 @@ the generator, registry, controller, undo operations and duplicate-ID repair.
 * Cost settings are stored in the model. Hardware unit prices are stored per machine (HARDWARE tab), so another machine opening the .skp needs the same prices entered.
 
 * Assembly steps come from part roles in a standard carcass-first order; they are not a manufacturer-verified procedure. Custom-template parts with unknown roles go into a generic step. The exploded view uses fixed directions per role (generic 'away from centre' for unknown roles, which can overlap), and the drawings use approximate painter's-order depth sorting. While a cabinet is exploded, the model check warns and skips its overlap test.
+* Runs (RUNS tab) are a batch-creation tool: they size and place ordinary cabinets, which are not linked to each other afterwards. A leftover gap is reported, not filled; there is no filler-strip cabinet yet. Widths are rounded to 1 mm.

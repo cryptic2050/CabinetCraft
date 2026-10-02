@@ -28,6 +28,7 @@
     { id: 'project', label: 'PROJECT', phase: 0 },
     { id: 'cabinets', label: 'CABINETS', phase: 0 },
     { id: 'templates', label: 'TEMPLATES', phase: 0 },
+    { id: 'runs', label: 'RUNS', phase: 0 },
     { id: 'parameters', label: 'PARAMETERS', phase: 0 },
     { id: 'materials', label: 'MATERIALS', phase: 0 },
     { id: 'hardware', label: 'HARDWARE', phase: 0 },
@@ -170,6 +171,7 @@
     else if (S.tab === 'nesting') { v.innerHTML = '<p class="mute">Loading...</p>'; loadNesting(); }
     else if (S.tab === 'labels') { v.innerHTML = '<p class="mute">Loading...</p>'; loadLabels(); }
     else if (S.tab === 'reports') { v.innerHTML = '<p class="mute">Loading...</p>'; loadReports(); }
+    else if (S.tab === 'runs') { paintRuns(); }
     else if (S.tab === 'assembly') { v.innerHTML = '<p class="mute">Loading...</p>'; loadAssembly(); }
     else if (S.tab === 'costs') { v.innerHTML = '<p class="mute">Loading...</p>'; loadCosts(); }
     else if (S.tab === 'hardware') { v.innerHTML = '<p class="mute">Loading...</p>'; loadHardware(); }
@@ -630,6 +632,60 @@
   }
 
 
+
+
+  // ---- Runs (Smart Space fill) -------------------------------------------------------------------------
+  function runState() {
+    if (!S.run) S.run = { length: 2400, items: [{ type: 'base_single_door', fixed: false, width: '', min: 300, max: 900 }, { type: 'base_drawer_3', fixed: false, width: '', min: 300, max: 900 }, { type: 'base_double_door', fixed: false, width: '', min: 300, max: 900 }], plan: null };
+    return S.run;
+  }
+  function runPayload() {
+    const r = runState();
+    return [r.length, r.items.map((i) => ({ type: i.type, fixed: i.fixed, width: i.fixed && i.width !== '' ? i.width : null, min: i.min, max: i.max }))];
+  }
+  function paintRuns() {
+    const v = $('#view'); const r = runState();
+    const types = S.boot.library;
+    const rows = r.items.map((it, n) => `<tr><td class="num">${n + 1}</td>
+      <td><select data-rf="type" data-n="${n}">${types.map((e) => `<option value="${esc(e.type)}" ${e.type === it.type ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}</select></td>
+      <td><label><input type="checkbox" data-rf="fixed" data-n="${n}" ${it.fixed ? 'checked' : ''}> fixed</label></td>
+      <td><input type="number" step="any" data-rf="width" data-n="${n}" value="${it.width === '' ? '' : toDisp(it.width)}" placeholder="auto" ${it.fixed ? '' : 'disabled'} style="width:80px"></td>
+      <td><input type="number" step="any" data-rf="min" data-n="${n}" value="${toDisp(it.min)}" ${it.fixed ? 'disabled' : ''} style="width:70px"></td>
+      <td><input type="number" step="any" data-rf="max" data-n="${n}" value="${toDisp(it.max)}" ${it.fixed ? 'disabled' : ''} style="width:70px"></td>
+      <td><button class="ghost" data-rdel="${n}">&times;</button></td></tr>`).join('');
+    v.innerHTML = `<h2>RUNS</h2><p class="mute">A run fills a wall with cabinets side by side. Fixed cabinets keep their width; the others share the rest equally within their min/max. Creating a run adds ordinary cabinets (one undo step) to the right of the existing ones; it is a creation tool, the cabinets are not linked afterwards. Lengths are in ${S.unit}.</p>
+      <div class="card"><div class="row"><label class="mute">Wall length (${S.unit})</label><input type="number" step="any" id="run_len" value="${toDisp(r.length)}" style="width:110px"></div>
+      <table style="margin-top:8px"><tr><th>#</th><th>Cabinet</th><th></th><th>Width</th><th>Min</th><th>Max</th><th></th></tr>${rows}</table>
+      <div class="row" style="margin-top:8px"><button class="ghost" id="run_add">Add cabinet</button><button class="ghost" id="run_plan">Calculate</button><button class="primary" id="run_create">Create run in model</button></div></div>
+      <div id="run_result"></div>`;
+    bindRuns(); paintRunPlan();
+  }
+  function paintRunPlan() {
+    const el = $('#run_result'); const r = runState(); const p = r.plan; if (!el || !p) return;
+    const total = Math.max(p.used + p.leftover, 1);
+    const bar = p.widths.length ? `<div style="display:flex;height:34px;border:1px solid var(--line,#444);margin:8px 0">${p.items.map((i, n) => `<div title="${esc(i.type)}" style="flex:${p.widths[n]};background:${n % 2 ? '#8a6a4a' : '#a98458'};color:#fff;font-size:11px;display:flex;align-items:center;justify-content:center;border-right:1px solid #222;overflow:hidden">${fmt(p.widths[n])}</div>`).join('')}${p.leftover > 0 ? `<div style="flex:${p.leftover};background:repeating-linear-gradient(45deg,#333,#333 6px,#222 6px,#222 12px);color:#fff;font-size:11px;display:flex;align-items:center;justify-content:center">gap ${fmt(p.leftover)}</div>` : ''}</div>` : '';
+    el.innerHTML = `<div class="card"><h3>Plan ${p.ok ? '<span class="badge impl">FITS</span>' : '<span class="badge warnb">DOES NOT FIT</span>'}</h3>${bar}
+      <p>Total ${fmt(total)} ${S.unit}${p.leftover > 0 ? ` &middot; <b>${fmt(p.leftover)} ${S.unit} of the wall is empty</b>` : ''}${p.shortfall > 0 ? ` &middot; <b>${fmt(p.shortfall)} ${S.unit} too long</b>` : ''}</p>
+      ${p.issues.length ? `<ul class="issues">${p.issues.map((m) => `<li class="warning">${esc(m)}</li>`).join('')}</ul>` : ''}</div>`;
+  }
+  function readRun() {
+    const r = runState();
+    r.length = fromDispUnit($('#run_len').value);
+    document.querySelectorAll('[data-rf]').forEach((i) => {
+      const it = r.items[+i.dataset.n]; const k = i.dataset.rf;
+      it[k] = k === 'type' ? i.value : k === 'fixed' ? i.checked : (i.value === '' ? '' : fromDispUnit(i.value));
+    });
+  }
+  function fromDispUnit(x) { return fromDisp(x); }
+  function bindRuns() {
+    const re = (keep) => { readRun(); if (!keep) runState().plan = null; };
+    document.querySelectorAll('[data-rf]').forEach((i) => (i.onchange = () => { re(); paintRuns(); }));
+    $('#run_len').onchange = () => { re(); };
+    $('#run_add').onclick = () => { re(); runState().items.push({ type: 'base_cabinet', fixed: false, width: '', min: 300, max: 900 }); paintRuns(); };
+    document.querySelectorAll('[data-rdel]').forEach((b) => (b.onclick = () => { re(); runState().items.splice(+b.dataset.rdel, 1); paintRuns(); }));
+    $('#run_plan').onclick = () => { re(true); rpc('plan_run', runPayload()).then((p) => { runState().plan = p; paintRunPlan(); }).catch(showError); };
+    $('#run_create').onclick = () => { re(true); rpc('create_run', runPayload()).then((res) => { runState().plan = res.plan; paintRunPlan(); refreshList(); toast(`Created ${res.created.length} cabinets`); }).catch(showError); };
+  }
 
   // ---- Assembly ---------------------------------------------------------------------------------------
   function loadAssembly(amount) {

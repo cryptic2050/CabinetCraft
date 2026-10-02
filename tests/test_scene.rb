@@ -1266,3 +1266,77 @@ class TestAssemblyScene < Minitest::Test
     assert_equal false, r['ok']
   end
 end
+
+class TestRunScene < Minitest::Test
+  def setup
+    Sketchup.reset_model!
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    @c = CabinetCraft::Interface::Controller.new
+    @model = Sketchup.active_model
+  end
+
+  def groups
+    @model.entities.grep(Sketchup::Group)
+  end
+
+  def starts
+    @model.instance_variable_get(:@ops).count { |o| o.first == :start }
+  end
+
+  def test_plan_is_pure_and_returns_widths_per_item
+    r = @c.plan_run(2400, [{ 'type' => 'base_single_door' }, { 'type' => 'base_drawer_3' }, { 'type' => 'base_double_door', 'fixed' => true, 'width' => 800 }])
+    assert r['ok']
+    assert_equal [800, 800, 800], r['widths']
+    assert_equal %w[base_single_door base_drawer_3 base_double_door], r['items'].map { |i| i['type'] }
+    assert_empty groups
+  end
+
+  def test_create_run_places_cabinets_edge_to_edge_with_exact_widths
+    res = @c.create_run(2400, [{ 'type' => 'base_single_door' }, { 'type' => 'base_drawer_3' }, { 'type' => 'base_double_door', 'fixed' => true, 'width' => 900 }])
+    assert res['ok']
+    assert_equal [750, 750, 900], res['created'].map { |c| c['params']['width'] }
+    assert_equal %w[B01 B02 B03], res['created'].map { |c| c['label'] }
+    boxes = groups.map { |g| [g.bounds.min.x * 25.4, g.bounds.max.x * 25.4] }.sort
+    assert_in_delta 0, boxes.first[0], 1e-6
+    boxes.each_cons(2) { |a, b| assert_in_delta a[1], b[0], 1e-6 } # no gaps, no overlap
+    assert_in_delta 2400, boxes.last[1], 1e-6
+    assert_empty(@c.validate['issues'].select { |i| i['code'] == 'cabinets_overlap' })
+  end
+
+  def test_run_starts_after_existing_cabinets_and_is_one_undo_step
+    @c.create('base_cabinet', 'width' => 500)
+    n = starts
+    @c.create_run(1200, [{ 'type' => 'base_cabinet' }, { 'type' => 'base_cabinet' }])
+    assert_equal n + 1, starts
+    xs = groups.map { |g| g.bounds.min.x * 25.4 }.sort
+    assert_in_delta 500, xs[1], 1e-6
+    assert_in_delta 1100, xs[2], 1e-6
+  end
+
+  def test_nothing_is_created_when_the_row_does_not_fit_or_a_cabinet_is_invalid
+    assert_raises(ArgumentError) { @c.create_run(500, [{ 'type' => 'base_cabinet' }, { 'type' => 'base_cabinet' }]) } # needs >= 600
+    assert_raises(ArgumentError) { @c.create_run(1200, [{ 'type' => 'nope' }]) }
+    assert_raises(ArgumentError) { @c.create_run(1200, [{ 'type' => 'base_cabinet', 'params' => { 'material' => 'missing' } }]) }
+    assert_raises(ArgumentError) { @c.create_run(1200, []) }
+    assert_empty groups
+  end
+
+  def test_leftover_wall_is_reported_but_the_run_is_still_created
+    res = @c.create_run(2000, [{ 'type' => 'base_cabinet', 'max' => 600 }, { 'type' => 'base_cabinet', 'max' => 600 }])
+    assert res['ok']
+    assert_equal 800.0, res['plan']['leftover']
+    assert_equal 2, groups.size
+  end
+
+  def test_per_item_params_are_kept_and_widths_win
+    res = @c.create_run(1500, [{ 'type' => 'base_cabinet', 'params' => { 'width' => 111, 'shelf_count' => 3, 'door_count' => 0 } }, { 'type' => 'base_cabinet' }])
+    first = res['created'].first['params']
+    assert_equal [750, 3], first.values_at('width', 'shelf_count')
+  end
+
+  def test_invalid_plan_input_is_a_clean_failure_for_the_preview
+    r = @c.plan_run('abc', [{ 'type' => 'base_cabinet' }])
+    assert_equal false, r['ok']
+    assert_equal false, @c.plan_run(1000, [{ 'type' => 'zzz' }])['ok']
+  end
+end

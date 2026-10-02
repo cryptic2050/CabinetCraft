@@ -188,5 +188,7 @@ cabinetcraft/
 | 6 | Company standards (manufacturing defaults, applied to new cabinets) | IMPLEMENTED |
 | 6 | Cost estimation (`manufacturing/costing.rb`: materials by nested sheets or area, edge banding, hardware unit prices, CNC, labour, installation, transport, margin; per-cabinet allocation that sums exactly to the totals; internal costing PDF/CSV/JSON and client quote PDF with selling prices only; COSTS tab) | IMPLEMENTED |
 | 6 | Assembly documentation (`manufacturing/assembly.rb` steps and exploded geometry, `scene/explode.rb` reversible part offsets stored per part, SVG and vector PDF drawings, ASSEMBLY tab) | IMPLEMENTED |
+| 7 | Cabinet runs with Smart Space fill (`core/run_planner.rb`, RUNS tab): fixed and flexible cabinets sized to fill a wall exactly, one-undo-step creation | IMPLEMENTED |
+| 7 | Runs as persistent linked objects, Quick Stretch, corner logic, filler-strip cabinets | PLANNED |
 | - | All other library cabinets (wall, tall, wardrobe, vanity, TV, corner...) | PLANNED - listed, not selectable |
 | - | PLACEHOLDER | none: no control exists that does nothing |
