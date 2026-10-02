@@ -10,6 +10,7 @@ class TestMachining < Minitest::Test
 
   def setup
     CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    CabinetCraft::Standards.current = CabinetCraft::Standards.new
     CabinetCraft::MachiningConfig.current = MC.new
   end
 

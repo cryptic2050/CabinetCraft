@@ -5,7 +5,7 @@ require 'sketchup.rb'
 %w[
   core/units core/material core/material_config core/construction core/hardware core/parameter core/rules core/edge_banding core/panel core/overrides
   templates/expression templates/template templates/examples templates/registry
-  core/hardware_rules core/library core/cabinet
+  core/hardware_rules core/standards core/library core/cabinet
   generators/panel_generator generators/cabinet_generator
   manufacturing/parts_list manufacturing/cutting_list manufacturing/cut_sequence manufacturing/nesting manufacturing/labels
   exporters/csv_exporter exporters/json_exporter exporters/label_html utilities/qr_code
@@ -21,6 +21,7 @@ module CabinetCraft
   Material.config = MaterialConfig.new(Scene::SettingsStore.new('materials_config'))
   MachiningConfig.current = MachiningConfig.new(Scene::SettingsStore.new('machining_config'))
   Templates.config = Templates::Config.new(Scene::SettingsStore.new('templates_config'))
+  Standards.current = Standards.new(Scene::SettingsStore.new('standards_config'))
 
   unless file_loaded?(__FILE__)
     open_cmd = ::UI::Command.new('CabinetCraft Pro') { Interface::Dashboard.show }

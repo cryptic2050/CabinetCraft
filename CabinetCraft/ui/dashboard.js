@@ -52,9 +52,9 @@
   const schemaFor = (type) => (S.boot.schemas && S.boot.schemas[type]) || S.boot.schema;
   function setLibrary(lib, schemas) {
     S.boot.library = lib; S.boot.schemas = schemas; S.boot.defaults = {};
-    lib.forEach((e) => { const d = {}; schemaFor(e.type).forEach((f) => (d[f.key] = f.default)); S.boot.defaults[e.type] = Object.assign(d, e.defaults); });
+    lib.forEach((e) => { S.boot.defaults[e.type] = Object.assign({}, e.resolved); }); // resolved on the server: schema < company standards < the type's own defaults
   }
-  function refreshLibrary() { return rpc('library_state').then((l) => { setLibrary(l.library, l.schemas); if (S.tab === 'cabinets') render(); }).catch(() => {}); }
+  function refreshLibrary() { return rpc('library_state').then((l) => { S.boot.standards = l.standards; setLibrary(l.library, l.schemas); if (S.tab === 'cabinets') render(); }).catch(() => {}); }
 
   // ---- Helpers --------------------------------------------------------------
   const UNIT_MM = { mm: 1, cm: 10, m: 1000, in: 25.4 };
@@ -213,7 +213,7 @@
     const canSave = !(lib && lib.user === 'template'); // templates are edited in TEMPLATES; everything else can be saved as a preset
     const action = (S.editing
       ? `<span class="mute">Changes apply to the model as you type.</span> <button class="ghost" id="newcab">New cabinet</button>`
-      : `<button class="primary" id="create" ${S.busy ? 'disabled' : ''}>CREATE</button>`) + (canSave ? ' <button class="ghost" id="saveas">Save as template...</button>' : '');
+      : `<button class="primary" id="create" ${S.busy ? 'disabled' : ''}>CREATE</button>`) + (canSave ? ' <button class="ghost" id="saveas">Save as template...</button>' : '') + (S.editing && lib && lib.user !== 'template' && Object.keys((S.boot.standards || {}).values || {}).length ? ' <button class="ghost" id="applystd">Apply company standards</button>' : '');
     return `<h2>${title}</h2><div class="row" style="margin-bottom:10px">${action}</div>
       <div id="ovr_warn"></div><div id="issues"></div>${body}<h2>CALCULATED</h2><div id="calc"></div>
       ${S.editing ? `<h2>ADVANCED PARTS</h2><details id="adv" ${S.advOpen ? 'open' : ''}><summary>MANUAL OVERRIDES (AUTO unless changed)</summary><div id="advbody" style="padding:10px 12px"><p class="mute">Loading...</p></div></details>` : ''}`;
@@ -240,6 +240,7 @@
         schedule();
       };
     });
+    const as = $('#applystd'); if (as) as.onclick = () => { Object.assign(S.params, S.boot.standards.values); render(); schedule(); toast('Company standards applied to this cabinet'); };
     const sa = $('#saveas'); if (sa) sa.onclick = () => {
       const name = prompt('Name for the new cabinet template'); if (!name) return;
       const cat = prompt('Category (e.g. BASE CABINETS, WARDROBES, CUSTOM)', (S.boot.library.find((e) => e.type === S.type) || {}).category || 'CUSTOM'); if (cat === null) return;
@@ -739,17 +740,45 @@
     return `<h2>SETTINGS</h2><div class="card"><div class="field"><label for="unit">Display units</label>
       <select id="unit">${Object.keys(UNIT_MM).map((u) => `<option ${u === S.unit ? 'selected' : ''}>${u}</option>`).join('')}</select>
       <div class="note">Model data is always stored in millimetres; this changes only what you see and type.</div></div></div>
-      <p class="mute">Company manufacturing standards: planned (Phase 6).</p>`;
+      <h2>MANUFACTURING STANDARDS</h2><div id="stdbox"><p class="mute">Loading...</p></div>`;
   }
   function bindSettings() {
     $('#unit').onchange = (e) => { S.unit = e.target.value; save('cc_unit', S.unit); render(); };
+    rpc('standards_state').then((st) => { S.std = st; paintStandards(); }).catch(showError);
+  }
+  function paintStandards() {
+    const el = $('#stdbox'); const st = S.std; if (!el || !st) return; const set = st.standards.values;
+    const field = (f) => {
+      const on = Object.prototype.hasOwnProperty.call(set, f.key); const cur = on ? set[f.key] : f.default;
+      let input;
+      if (f.type === 'enum') input = `<select data-std="${f.key}" ${on ? '' : 'disabled'}>${f.options.map((o) => `<option value="${esc(o.value)}" ${o.value === String(cur) ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}</select>`;
+      else input = `<input type="number" step="any" data-std="${f.key}" ${on ? '' : 'disabled'} value="${f.type === 'length' ? toDisp(cur) : cur}">`;
+      return `<div class="field"><label><input type="checkbox" data-stdon="${f.key}" ${on ? 'checked' : ''}> ${esc(f.label)}${f.type === 'length' ? ` (${S.unit})` : ''}</label>${input}</div>`;
+    };
+    const groups = {}; st.fields.forEach((f) => (groups[f.group] = groups[f.group] || []).push(f));
+    el.innerHTML = `<div class="card"><div class="field"><label>Company name</label><input id="std_name" value="${esc(st.standards.name)}"></div>
+      <p class="mute">Tick a setting to make it your standard. Every NEW cabinet starts with these values (cabinet size, door / drawer / shelf counts are design choices and are not standardised). Existing cabinets are not changed.</p></div>
+      ${Object.entries(groups).map(([g, fs]) => `<details open><summary>${esc(g)}</summary><div class="fields">${fs.map(field).join('')}</div></details>`).join('')}
+      <div class="row" style="margin:10px 0"><button class="primary" id="std_save">Save standards</button><button class="ghost" id="std_reset">Reset to factory defaults</button></div>
+      <p class="mute">Hinge spacing, connector spacing, shelf pins and handle positions are placement rules: see HARDWARE. Hinge inset now ${st.hardware_settings.hinge_inset} mm, connector spacing ${st.hardware_settings.connector_spacing} mm.</p>`;
+    el.querySelectorAll('[data-stdon]').forEach((c) => (c.onchange = () => { el.querySelector(`[data-std="${c.dataset.stdon}"]`).disabled = !c.checked; }));
+    const apply = (r) => { S.std = r; setLibrary(r.library, r.schemas); S.boot.standards = r.standards; paintStandards(); toast('Standards saved - new cabinets use them'); };
+    $('#std_save').onclick = () => {
+      const values = {};
+      el.querySelectorAll('[data-stdon]').forEach((c) => {
+        if (!c.checked) return; const f = st.fields.find((x) => x.key === c.dataset.stdon); const i = el.querySelector(`[data-std="${f.key}"]`);
+        values[f.key] = f.type === 'length' ? fromDisp(i.value) : f.type === 'enum' ? i.value : parseFloat(i.value);
+      });
+      rpc('save_standards', [$('#std_name').value, values]).then(apply).catch(showError);
+    };
+    $('#std_reset').onclick = () => rpc('reset_standards').then((r) => { apply(r); toast('Factory defaults restored'); }).catch(showError);
   }
 
   // ---- Boot -----------------------------------------------------------------
   function start() {
     rpc('bootstrap').then((b) => {
       S.boot = b;
-      setLibrary(b.library, b.schemas || {});
+      S.boot.standards = b.standards; setLibrary(b.library, b.schemas || {});
       S.params = Object.assign({}, S.boot.defaults[S.type]); S.cabinets = b.cabinets;
       if (b.selected) loadCabinet(b.selected); else render();
     }).catch((e) => { $('#view').innerHTML = `<div class="card"><h3>Cannot connect</h3><p>${esc(e.message)}</p></div>`; });

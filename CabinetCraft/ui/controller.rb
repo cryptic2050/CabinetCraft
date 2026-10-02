@@ -39,7 +39,7 @@ module CabinetCraft
                           materials_state save_material delete_material reset_material
                           advanced_parts set_override reset_overrides
                           library_state templates_state validate_template save_template delete_template install_example
-                          save_preset delete_preset
+                          save_preset delete_preset standards_state save_standards reset_standards
                           machining_state set_machining_setting add_pattern delete_pattern select_machine save_machine
                           delete_machine save_post delete_post cnc_check cnc_preview].freeze
 
@@ -58,7 +58,8 @@ module CabinetCraft
       def bootstrap
         {
           'version' => defined?(CabinetCraft::VERSION) ? CabinetCraft::VERSION : 'dev',
-          'library' => (sync_templates && Library.entries),
+          'library' => (sync_templates && library_entries),
+          'standards' => standards_summary,
           'planned' => Library::PLANNED,
           'schema' => Parameter.schema,
           'schemas' => template_schemas,
@@ -235,9 +236,36 @@ module CabinetCraft
         Library.template_entries.to_h { |e| [e['type'], Templates.find(e['type']).schema] }
       end
 
+      # Library entries with the starting values a NEW cabinet of each type gets (standards applied server-side).
+      def library_entries
+        Library.entries.map { |e| e.merge('resolved' => Library.defaults_for(e['type'])) }
+      end
+
+      def standards_summary
+        { 'name' => Standards.current.name, 'values' => Standards.current.values }
+      end
+
       def library_state
         sync_templates
-        { 'library' => Library.entries, 'schemas' => template_schemas, 'planned' => Library::PLANNED }
+        { 'library' => library_entries, 'schemas' => template_schemas, 'planned' => Library::PLANNED, 'standards' => standards_summary }
+      end
+
+      # --- Factory standards -----------------------------------------------------------------------
+
+      def standards_state
+        { 'standards' => standards_summary, 'fields' => Standards.fields, 'allowed' => Standards::ALLOWED,
+          'schema_defaults' => Parameter.defaults.slice(*Standards::ALLOWED),
+          'hardware_settings' => Hardware.config.settings }
+      end
+
+      def save_standards(name, values)
+        Standards.current.save(name: name, values: values)
+        standards_state.merge('library' => library_entries, 'schemas' => template_schemas)
+      end
+
+      def reset_standards
+        Standards.current.reset
+        standards_state.merge('library' => library_entries, 'schemas' => template_schemas)
       end
 
       def type_users(type)
@@ -277,7 +305,7 @@ module CabinetCraft
         t = Templates.config.save_template(json, id)
         regenerate(Scene::Registry.cabinets(model).select { |_, c| c.type == t.id }, 'CabinetCraft: Edit template')
         snapshot_templates
-        templates_state.merge('saved_id' => t.id, 'library' => Library.entries, 'schemas' => template_schemas)
+        templates_state.merge('saved_id' => t.id, 'library' => library_entries, 'schemas' => template_schemas)
       rescue Templates::Template::Invalid => e
         { 'ok' => false, 'errors' => e.errors }
       end
@@ -288,7 +316,7 @@ module CabinetCraft
 
         Templates.config.delete_template(id) or raise ArgumentError, 'Unknown template'
         snapshot_templates
-        templates_state.merge('library' => Library.entries, 'schemas' => template_schemas)
+        templates_state.merge('library' => library_entries, 'schemas' => template_schemas)
       end
 
       def install_example(key)
@@ -300,7 +328,7 @@ module CabinetCraft
       def save_preset(name, category, description, base_type, params)
         Templates.config.save_preset(name: name, category: category, description: description, base_type: base_type, params: params)
         snapshot_templates
-        templates_state.merge('library' => Library.entries, 'schemas' => template_schemas)
+        templates_state.merge('library' => library_entries, 'schemas' => template_schemas)
       end
 
       def delete_preset(id)
@@ -309,7 +337,7 @@ module CabinetCraft
 
         Templates.config.delete_preset(id) or raise ArgumentError, 'Unknown preset'
         snapshot_templates
-        templates_state.merge('library' => Library.entries, 'schemas' => template_schemas)
+        templates_state.merge('library' => library_entries, 'schemas' => template_schemas)
       end
 
       # --- Materials ----------------------------------------------------------------------------

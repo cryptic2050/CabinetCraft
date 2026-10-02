@@ -1039,3 +1039,45 @@ class TestSceneTemplates < Minitest::Test
     assert_empty CabinetCraft::Templates.config.presets
   end
 end
+
+class TestSceneStandards < Minitest::Test
+  def setup
+    Sketchup.reset_model!
+    @c = CabinetCraft::Interface::Controller.new
+  end
+
+  def test_library_defaults_are_resolved_on_the_server
+    lib = @c.bootstrap['library']
+    door = lib.find { |e| e['type'] == 'base_single_door' }
+    assert_equal [100.0, 820.0, 'mdf_18'], door['resolved'].values_at('toe_kick_height', 'height', 'material')
+    st = @c.save_standards('Acme Joinery', 'material' => 'ply_18', 'toe_kick_height' => 120, 'door_reveal' => 2)
+    assert_equal 'Acme Joinery', st['standards']['name']
+    door = st['library'].find { |e| e['type'] == 'base_single_door' }
+    assert_equal [120.0, 840.0, 'ply_18', 2.0], door['resolved'].values_at('toe_kick_height', 'height', 'material', 'door_reveal')
+    assert_equal({ 'material' => 'ply_18', 'toe_kick_height' => 120.0, 'door_reveal' => 2.0 }, @c.bootstrap['standards']['values'])
+  end
+
+  def test_new_cabinets_use_standards_and_existing_ones_do_not_change
+    old = @c.create('base_single_door', {})['cabinet']
+    @c.save_standards('Acme', 'front_material' => 'ply_18', 'edge_front' => 0.4)
+    fresh = @c.create('base_single_door', @c.bootstrap['library'].find { |e| e['type'] == 'base_single_door' }['resolved'])['cabinet']
+    assert_equal ['mdf_18', 2.0], old['params'].values_at('front_material', 'edge_front')
+    assert_equal ['ply_18', 0.4], fresh['params'].values_at('front_material', 'edge_front')
+    assert_equal 'mdf_18', @c.list['cabinets'].find { |c| c['id'] == old['id'] }['params']['front_material']
+  end
+
+  def test_invalid_standards_raise_and_reset_restores_factory
+    assert_raises(ArgumentError) { @c.save_standards('x', 'door_reveal' => 99) }
+    assert_empty @c.standards_state['standards']['values']
+    @c.save_standards('Acme', 'door_gap' => 5)
+    assert_equal 5.0, @c.standards_state['standards']['values']['door_gap']
+    assert_empty @c.reset_standards['standards']['values']
+    fields = @c.standards_state['fields'].map { |f| f['key'] }
+    refute_includes fields, 'width'
+    JSON.generate(@c.standards_state)
+  end
+
+  def test_standards_state_exposes_hardware_placement_settings
+    assert_equal 100.0, @c.standards_state['hardware_settings']['hinge_inset']
+  end
+end

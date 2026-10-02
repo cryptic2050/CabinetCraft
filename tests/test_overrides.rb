@@ -8,6 +8,7 @@ class TestOverrides < Minitest::Test
 
   def setup
     CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    CabinetCraft::Standards.current = CabinetCraft::Standards.new
     CabinetCraft::Material.config = CabinetCraft::MaterialConfig.new
     CabinetCraft::Templates.config = CabinetCraft::Templates::Config.new
     CabinetCraft::MachiningConfig.current = CabinetCraft::MachiningConfig.new

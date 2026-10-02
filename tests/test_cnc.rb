@@ -15,6 +15,7 @@ class TestCnc < Minitest::Test
 
   def setup
     CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    CabinetCraft::Standards.current = CabinetCraft::Standards.new
     MC.current = MC.new
     cab = CabinetCraft::Cabinet.build(type: 'base_cabinet', label: 'B01',
                                       params: params('width' => 800, 'height' => 820, 'toe_kick_height' => 100, 'door_count' => 2, 'shelf_count' => 1, 'handle_type' => 'handle_bar'))
