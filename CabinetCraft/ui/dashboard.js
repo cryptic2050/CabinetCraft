@@ -36,6 +36,7 @@
     { id: 'labels', label: 'LABELS', phase: 0 },
     { id: 'reports', label: 'REPORTS', phase: 0 },
     { id: 'cnc', label: 'CNC', phase: 0 },
+    { id: 'assembly', label: 'ASSEMBLY', phase: 0 },
     { id: 'costs', label: 'COSTS', phase: 0 },
     { id: 'settings', label: 'SETTINGS', phase: 0 }
   ];
@@ -169,6 +170,7 @@
     else if (S.tab === 'nesting') { v.innerHTML = '<p class="mute">Loading...</p>'; loadNesting(); }
     else if (S.tab === 'labels') { v.innerHTML = '<p class="mute">Loading...</p>'; loadLabels(); }
     else if (S.tab === 'reports') { v.innerHTML = '<p class="mute">Loading...</p>'; loadReports(); }
+    else if (S.tab === 'assembly') { v.innerHTML = '<p class="mute">Loading...</p>'; loadAssembly(); }
     else if (S.tab === 'costs') { v.innerHTML = '<p class="mute">Loading...</p>'; loadCosts(); }
     else if (S.tab === 'hardware') { v.innerHTML = '<p class="mute">Loading...</p>'; loadHardware(); }
     else if (S.tab === 'project') { v.innerHTML = projectView(); bindProject(); }
@@ -627,6 +629,45 @@
     v.querySelectorAll('[data-rmrule]').forEach((b) => (b.onclick = () => { const r = readRules(); r.splice(+b.dataset.rmrule, 1); S.hw.hinge_rules = r; paintHardware(); }));
   }
 
+
+
+  // ---- Assembly ---------------------------------------------------------------------------------------
+  function loadAssembly(amount) {
+    rpc('list').then((l) => {
+      S.asmCabs = l.cabinets || [];
+      if (!S.asmCabs.length) { S.asm = null; paintAssembly(); return null; }
+      if (!S.asmId || !S.asmCabs.some((c) => c.id === S.asmId)) S.asmId = S.asmCabs[0].id;
+      return rpc('assembly_state', [S.asmId, amount == null ? null : amount]).then((a) => { S.asm = a; paintAssembly(); });
+    }).catch(showError);
+  }
+  function paintAssembly() {
+    const v = $('#view'); if (S.tab !== 'assembly') return;
+    if (!S.asmCabs || !S.asmCabs.length) { v.innerHTML = '<h2>ASSEMBLY</h2><p class="mute">Create cabinets first.</p>'; return; }
+    const a = S.asm;
+    const sel = `<select id="as_cab">${S.asmCabs.map((c) => `<option value="${esc(c.id)}" ${c.id === S.asmId ? 'selected' : ''}>${esc(c.label)} ${esc(c.type)}</option>`).join('')}</select>`;
+    if (!a || !a.ok) { v.innerHTML = `<h2>ASSEMBLY</h2><div class="row">${sel}</div><ul class="issues">${((a && a.issues) || []).map((i) => `<li class="error">${esc(i.message)}</li>`).join('')}</ul>`; bindAssembly(); return; }
+    const parts = a.parts.map((p) => `<tr><td class="num">${p.seq}</td><td class="mono">${esc(p.part_id)}</td><td>${esc(p.name)}</td><td class="num">${esc(p.size)}</td><td>${esc(p.material)}</td></tr>`).join('');
+    const steps = a.steps.map((s) => `<li><b>${esc(s.title)}</b><br>${esc(s.text)}${s.parts.length ? `<br><span class="mute">Parts: ${esc(s.parts.join(', '))}</span>` : ''}${s.hardware.length ? `<br><span class="mute">Hardware: ${s.hardware.map((h) => h.qty + ' x ' + esc(h.name)).join(', ')}</span>` : ''}</li>`).join('');
+    v.innerHTML = `<h2>ASSEMBLY ${a.exploded_in_model ? '<span class="badge warnb">EXPLODED IN MODEL</span>' : ''}</h2>
+      <div class="row">${sel}<label class="mute">Explode distance (mm)</label><input type="number" id="as_amt" min="0" max="2000" step="10" value="${a.amount}" style="width:90px">
+      <button class="ghost" id="as_preview">Preview</button><button class="primary" id="as_explode">Explode in model</button><button class="ghost" id="as_assemble" ${a.exploded_in_model ? '' : 'disabled'}>Assemble in model</button></div>
+      <p class="mute">Explode moves this cabinet's parts apart in SketchUp (one undo step, fully reversible). While exploded, the cabinet is not checked for overlaps with its neighbours.</p>
+      <div class="row" style="align-items:flex-start;flex-wrap:wrap"><div class="card" style="flex:1;min-width:280px"><h3>Assembled</h3>${a.svg_assembled}</div><div class="card" style="flex:1;min-width:280px"><h3>Exploded</h3>${a.svg_exploded}</div></div>
+      <h2>PARTS</h2><div class="card"><table><tr><th>No</th><th>Part ID</th><th>Part</th><th>Size (mm)</th><th>Material</th></tr>${parts}</table></div>
+      <h2>STEPS</h2><div class="card"><ol style="margin:0 0 0 18px;padding:0">${steps}</ol></div>
+      ${exportButtons('assembly', [['pdf', 'PDF (all cabinets)']])}
+      <p class="mute">Steps follow a standard carcass-first order from the part roles; they are not a manufacturer-verified procedure. Custom-template parts with unknown roles are listed in a generic step. The drawings are an oblique projection with approximate depth ordering.</p>`;
+    bindAssembly(); bindExports();
+  }
+  function bindAssembly() {
+    const sel = $('#as_cab'); if (!sel) return;
+    sel.onchange = () => { S.asmId = sel.value; loadAssembly(); };
+    if (!$('#as_amt')) return;
+    const amt = () => $('#as_amt').value;
+    $('#as_preview').onclick = () => loadAssembly(amt());
+    $('#as_explode').onclick = () => rpc('explode_cabinet', [S.asmId, amt()]).then((r) => { S.asm = r; paintAssembly(); toast('Exploded in the model'); }).catch(showError);
+    $('#as_assemble').onclick = () => rpc('assemble_cabinet', [S.asmId]).then((r) => { S.asm = r; paintAssembly(); toast('Assembled'); }).catch(showError);
+  }
 
   // ---- Costs ---------------------------------------------------------------------------------------
   function loadCosts() { rpc('cost_state').then((c) => { S.costs = c; paintCosts(); }).catch(showError); }

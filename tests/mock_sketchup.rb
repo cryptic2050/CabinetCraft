@@ -19,9 +19,24 @@ module Geom
     end
   end
 
+  class Vector3d
+    attr_reader :x, :y, :z
+
+    def initialize(x = 0, y = 0, z = 0)
+      @x = x.to_f
+      @y = y.to_f
+      @z = z.to_f
+    end
+  end
+
+  # Translation-only stand-in: composing adds origins (SketchUp's transform! composes with the existing transformation).
   class Transformation
     attr_reader :origin
     attr_accessor :xscale, :yscale, :zscale
+
+    def self.translation(vector)
+      new(Point3d.new(vector.x, vector.y, vector.z))
+    end
 
     def initialize(origin = Point3d.new)
       @origin = origin
@@ -165,7 +180,8 @@ module Sketchup
     end
 
     def transform!(t)
-      @transformation = t
+      o = @transformation.origin
+      @transformation = Geom::Transformation.new(Geom::Point3d.new(o.x + t.origin.x, o.y + t.origin.y, o.z + t.origin.z))
     end
 
     def set_attribute(dict, key, value)

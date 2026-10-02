@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative 'attributes'
+require_relative 'explode'
 require_relative '../validation/validator'
 require_relative '../validation/collision_checker'
 
@@ -28,7 +29,11 @@ module CabinetCraft
             next
           end
           issues.concat(check_group(group, cab))
-          boxes << [cab, world_box(group)]
+          if Explode.exploded?(group)
+            issues << Validation::Validator.issue(:warning, 'cabinet_exploded', "#{cab.label} is shown exploded in the model (ASSEMBLY tab: Assemble). Its position is not checked against other cabinets.", cabinet: cab)
+          else
+            boxes << [cab, world_box(group)]
+          end
         end
         issues.concat(check_overlaps(boxes))
         issues

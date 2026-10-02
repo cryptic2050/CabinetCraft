@@ -18,6 +18,8 @@ require_relative '../manufacturing/labels'
 require_relative '../manufacturing/machining'
 require_relative '../manufacturing/cnc'
 require_relative '../manufacturing/costing'
+require_relative '../manufacturing/assembly'
+require_relative '../exporters/assembly_svg'
 require_relative '../exporters/dxf_exporter'
 require_relative '../exporters/pdf_reports'
 require_relative '../exporters/svg_exporter'
@@ -27,6 +29,7 @@ require_relative '../validation/validator'
 require_relative '../scene/registry'
 require_relative '../scene/project_store'
 require_relative '../scene/model_checker'
+require_relative '../scene/explode'
 
 module CabinetCraft
   module Interface
@@ -42,6 +45,7 @@ module CabinetCraft
                           library_state templates_state validate_template save_template delete_template install_example
                           save_preset delete_preset standards_state save_standards reset_standards
                           cost_state save_cost_settings set_hardware_price
+                          assembly_state explode_cabinet assemble_cabinet
                           machining_state set_machining_setting add_pattern delete_pattern select_machine save_machine
                           delete_machine save_post delete_post cnc_check cnc_preview].freeze
 
@@ -49,7 +53,7 @@ module CabinetCraft
       EXPORTS = { 'parts' => %w[csv excel_csv json pdf], 'cutting_list' => %w[csv excel_csv json pdf],
                   'hardware' => %w[csv excel_csv json], 'project' => %w[json],
                   'nesting' => %w[csv excel_csv json pdf], 'labels' => %w[pdf html csv excel_csv json],
-                  'machining' => %w[csv excel_csv json], 'costing' => %w[csv excel_csv json pdf], 'quote' => %w[pdf], 'dxf' => %w[dxf], 'svg' => %w[svg], 'gcode' => %w[nc], 'gcode_b' => %w[nc] }.freeze
+                  'machining' => %w[csv excel_csv json], 'costing' => %w[csv excel_csv json pdf], 'quote' => %w[pdf], 'assembly' => %w[pdf], 'dxf' => %w[dxf], 'svg' => %w[svg], 'gcode' => %w[nc], 'gcode_b' => %w[nc] }.freeze
       EXTENSIONS = { 'csv' => 'csv', 'excel_csv' => 'csv', 'json' => 'json', 'html' => 'html', 'pdf' => 'pdf', 'dxf' => 'dxf', 'svg' => 'svg', 'nc' => 'nc' }.freeze
       MULTI_FILE = %w[dxf svg gcode gcode_b].freeze # one file per nested sheet
 
@@ -283,6 +287,64 @@ module CabinetCraft
         hardware_state
       end
 
+      # --- Assembly documentation --------------------------------------------------------------
+
+      MAX_EXPLODE_MM = 2000.0
+
+      def assembly_state(cabinet_id, amount = nil)
+        group, cab = Scene::Registry.find(model, cabinet_id)
+        return failure('That cabinet no longer exists in the model') unless group
+        return failure('This cabinet has calculation errors; fix them before documenting its assembly') unless cab.calculation.ok?
+
+        assembly_payload(group, cab, explode_amount(amount))
+      end
+
+      # Moves the cabinet's parts apart in the SketchUp model (reversible; ASSEMBLE puts them back).
+      def explode_cabinet(cabinet_id, amount = nil)
+        group, cab = Scene::Registry.find(model, cabinet_id)
+        raise ArgumentError, 'That cabinet no longer exists in the model' unless group
+        raise ArgumentError, 'This cabinet has calculation errors' unless cab.calculation.ok?
+
+        amt = explode_amount(amount)
+        in_operation('CabinetCraft: Explode cabinet', reidentify: false) { Scene::Explode.apply(group, cab, amt) }
+        assembly_payload(group, cab, amt)
+      end
+
+      def assemble_cabinet(cabinet_id)
+        group, cab = Scene::Registry.find(model, cabinet_id)
+        raise ArgumentError, 'That cabinet no longer exists in the model' unless group
+
+        in_operation('CabinetCraft: Assemble cabinet', reidentify: false) { Scene::Explode.assemble(group) }
+        assembly_payload(group, cab, nil)
+      end
+
+      def explode_amount(amount)
+        return nil if amount.nil? || amount.to_s.strip.empty?
+
+        v = Float(amount)
+        raise ArgumentError, "Explode distance must be between 0 and #{MAX_EXPLODE_MM.round} mm" unless v.between?(0, MAX_EXPLODE_MM)
+
+        v
+      rescue ArgumentError, TypeError
+        raise ArgumentError, "Explode distance must be a number between 0 and #{MAX_EXPLODE_MM.round} mm"
+      end
+
+      def assembly_payload(group, cab, amount)
+        d = Manufacturing::Assembly.describe(cab, amount: amount)
+        { 'ok' => true, 'cabinet' => cab.summary, 'steps' => d['steps'], 'parts' => d['parts'], 'amount' => d['amount'],
+          'svg_assembled' => Exporters::AssemblySvg.svg(d['assembled']), 'svg_exploded' => Exporters::AssemblySvg.svg(d['exploded']),
+          'exploded_in_model' => Scene::Explode.exploded?(group), 'custom' => cab.custom? }
+      end
+
+      def assembly_item(cab)
+        d = Manufacturing::Assembly.describe(cab)
+        names = Library.entries.to_h { |e| [e['type'], e['name']] }
+        p = cab.params
+        dims = p['width'] && p['height'] && p['depth'] ? "#{p['width']} x #{p['height']} x #{p['depth']} mm (W x H x D)" : 'Custom template'
+        { 'label' => cab.label, 'type_name' => names[cab.type] || cab.type, 'dims' => dims, 'steps' => d['steps'], 'parts' => d['parts'],
+          'assembled' => d['assembled'], 'exploded' => d['exploded'] }
+      end
+
       # --- Factory standards -----------------------------------------------------------------------
 
       def standards_state
@@ -465,6 +527,7 @@ module CabinetCraft
         when 'labels' then Exporters::PdfReports.labels(Manufacturing::Labels.build(cabs, project_name: project, qr: false), project: project)
         when 'nesting' then Exporters::PdfReports.nesting(nest, project: project)
         when 'costing' then Exporters::PdfReports.costing(cost_estimate, project: project)
+        when 'assembly' then Exporters::PdfReports.assembly(cabs.map { |c| assembly_item(c) }, project: project)
         when 'quote' then Exporters::PdfReports.quote(cost_estimate, project: project, cabinets: cabs, type_names: Library.entries.to_h { |e| [e['type'], e['name']] })
         else raise ArgumentError, "#{kind} cannot be exported as pdf"
         end

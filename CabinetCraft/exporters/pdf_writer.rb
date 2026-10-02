@@ -89,6 +89,13 @@ module CabinetCraft
           @ops << "q #{color_ops(stroke, fill)} #{format('%.3f', width * MM)} w #{d} #{format('%.3f', x(x0))} #{format('%.3f', y(y0 + h))} #{format('%.3f', w * MM)} #{format('%.3f', h * MM)} re #{paint} Q"
         end
 
+        # Closed polygon from [[x, y], ...] points (page millimetres, y down).
+        def polygon(points, stroke: '000000', fill: nil, width: 0.2)
+          path = points.each_with_index.map { |(px, py), i| "#{format('%.3f', x(px))} #{format('%.3f', y(py))} #{i.zero? ? 'm' : 'l'}" }.join(' ')
+          paint = fill && stroke ? 'B' : fill ? 'f' : 'S'
+          @ops << "q #{color_ops(stroke, fill)} #{format('%.3f', width * MM)} w #{path} h #{paint} Q"
+        end
+
         def circle(cx, cy, r, stroke: '000000', fill: nil, width: 0.2)
           k = 0.5522847498 * r
           pts = [[cx + r, cy], [cx + r, cy + k, cx + k, cy + r, cx, cy + r], [cx - k, cy + r, cx - r, cy + k, cx - r, cy],

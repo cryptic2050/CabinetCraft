@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative 'pdf_writer'
+require_relative 'assembly_svg'
 require_relative '../utilities/qr_code'
 
 module CabinetCraft
@@ -158,6 +159,50 @@ module CabinetCraft
         r.spacer(2)
         r.heading("Total: #{money(c, est['selling_price'])}", size: 13)
         r.render
+      end
+
+      # items: [{ 'label', 'type_name', 'dims', 'steps', 'parts' => [{ part_id, name, size, material }], 'assembled' => view, 'exploded' => view }]
+      def assembly(items, project:, created: Time.now.utc)
+        r = PdfReport.new(title: 'Assembly instructions', project: project, created: created)
+        items.each_with_index do |it, i|
+          r.new_page if i.positive?
+          r.heading("#{it['label']}  #{it['type_name']}", size: 13)
+          r.paragraph("#{it['dims']}. The drawings are an oblique projection, not to scale between views; numbers match the parts table. The steps follow a standard carcass-first order and are not a manufacturer-verified procedure.")
+          half = (r.content_width - 6) / 2
+          r.ensure_space(half * 0.95 + 6)
+          top = r.cursor
+          [['Assembled', 'assembled', PdfReport::MARGIN], ['Exploded', 'exploded', PdfReport::MARGIN + half + 6]].each do |title, key, x|
+            r.page.text(x, top + 3, title, size: 8, font: :bold)
+            draw_view(r.page, it[key], x, top + 5, half, half * 0.9)
+          end
+          r.spacer(half * 0.9 + 8)
+          r.heading('Parts', size: 11)
+          r.table([left('No', 8), left('Part ID', 34), left('Part', 36), left('Size (mm)', 36), left('Material', 30)],
+                  it['parts'].map { |p| [p['seq'].to_s, p['part_id'], p['name'], p['size'], p['material']] })
+          r.heading('Steps', size: 11)
+          it['steps'].each do |s|
+            hw = s['hardware'].empty? ? '' : "  Hardware: #{s['hardware'].map { |h| "#{h['qty']} x #{h['name']}" }.join(', ')}."
+            parts = s['parts'].empty? ? '' : "  Parts: #{s['parts'].join(', ')}."
+            r.paragraph("#{s['n']}. #{s['title']}. #{s['text']}#{parts}#{hw}", color: '000000')
+          end
+        end
+        r.doc.add_page('a4').text(105, 150, 'No cabinets', align: :center) if items.empty?
+        r.render
+      end
+
+      # Draws an Assembly.view into the box (x, y, w, h) of a page, scaled to fit.
+      def draw_view(page, view, x, y, w, h)
+        x0, y0, x1, y1 = view['bounds']
+        scale = [w / [x1 - x0, 1].max, h / [y1 - y0, 1].max].min
+        ox = x + (w - (x1 - x0) * scale) / 2
+        oy = y + (h - (y1 - y0) * scale) / 2
+        map = ->(pt) { [ox + (pt[0] - x0) * scale, oy + (y1 - pt[1]) * scale] }
+        view['boxes'].each do |b|
+          b['faces'].each { |f| page.polygon(f['points'].map(&map), stroke: '2b2b2b', fill: AssemblySvg.shaded(f['shade']).delete('#'), width: 0.15) }
+          cx, cy = map.call(b['anchor'])
+          page.circle(cx, cy, 2.0, stroke: '222222', fill: 'ffffff', width: 0.15)
+          page.text(cx, cy + 0.9, b['seq'].to_s, size: 5.5, align: :center)
+        end
       end
 
       def hue_color(label)

@@ -9,10 +9,10 @@ require 'sketchup.rb'
   generators/panel_generator generators/cabinet_generator
   manufacturing/parts_list manufacturing/cutting_list manufacturing/cut_sequence manufacturing/nesting manufacturing/labels
   exporters/csv_exporter exporters/json_exporter exporters/label_html utilities/qr_code
-  core/machining_config manufacturing/cnc_posts manufacturing/machining manufacturing/cnc manufacturing/costing
+  core/machining_config manufacturing/cnc_posts manufacturing/machining manufacturing/cnc manufacturing/costing manufacturing/assembly exporters/assembly_svg
   exporters/dxf_exporter exporters/svg_exporter exporters/pdf_writer exporters/pdf_reports
   validation/collision_checker validation/machining_checker validation/validator
-  scene/attributes scene/registry scene/settings_store scene/project_store scene/model_checker
+  scene/attributes scene/registry scene/settings_store scene/project_store scene/explode scene/model_checker
   ui/controller ui/dialog
 ].each { |f| require File.join(CabinetCraft::PLUGIN_ROOT, f) }
 

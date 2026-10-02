@@ -400,7 +400,7 @@ class TestScenePhase4 < Minitest::Test
     @c.create('base_single_door', {})
     @c.create('base_single_door', {})
     a, b = groups
-    b.transform!(Geom::Transformation.new(Geom::Point3d.new(Units_mm(100), 0, 0))) # slide B onto A
+    b.transform!(Geom::Transformation.new(Geom::Point3d.new(Units_mm(100) - b.transformation.origin.x, 0, 0))) # slide B onto A (transform! composes)
     a.transformation.xscale = 1.5
     assert_includes codes(@c.validate), 'cabinets_overlap'
     assert_includes codes(@c.validate), 'cabinet_scaled'
@@ -1154,5 +1154,115 @@ class TestCostingScene < Minitest::Test
       %w[margin Margin profit Profit Total\ cost].each { |w| refute_includes bytes, w.b, w }
       assert File.size(File.join(dir, 'costing.pdf')) > 500
     end
+  end
+end
+
+class TestAssemblyScene < Minitest::Test
+  def setup
+    Sketchup.reset_model!
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    @c = CabinetCraft::Interface::Controller.new
+    @c.create('base_double_door', {})
+    @c.create('base_drawer_3', {})
+    @model = Sketchup.active_model
+  end
+
+  def groups
+    @model.entities.grep(Sketchup::Group)
+  end
+
+  def part_boxes(group)
+    group.entities.grep(Sketchup::Group).to_h { |p| [p.name, p.bounds.min.to_a + p.bounds.max.to_a] }
+  end
+
+  def id(i = 0)
+    @c.list['cabinets'][i]['id']
+  end
+
+  def test_assembly_state_has_steps_parts_and_both_drawings
+    s = @c.assembly_state(id)
+    assert s['ok']
+    assert_equal s['parts'].size, s['svg_exploded'].scan('<g data-part=').size
+    assert_equal s['parts'].size, s['svg_assembled'].scan('<g data-part=').size
+    assert_equal false, s['exploded_in_model']
+    assert_operator s['steps'].size, :>=, 5
+  end
+
+  def test_explode_moves_parts_and_assemble_restores_them_exactly
+    g = groups.first
+    before = part_boxes(g)
+    res = @c.explode_cabinet(id, 120)
+    assert res['exploded_in_model']
+    during = part_boxes(g)
+    assert_operator (during['B01-SIDE_LEFT'][0] - before['B01-SIDE_LEFT'][0]).abs, :>, 1 # inches
+    assert_in_delta(-120, (during['B01-SIDE_LEFT'][0] - before['B01-SIDE_LEFT'][0]) * 25.4, 1e-6)
+    assert_in_delta 120, (during['B01-SIDE_RIGHT'][0] - before['B01-SIDE_RIGHT'][0]) * 25.4, 1e-6
+    assert_equal false, @c.assemble_cabinet(id)['exploded_in_model']
+    part_boxes(g).each { |k, v| v.zip(before[k]).each { |a, b| assert_in_delta b, a, 1e-9, k } }
+  end
+
+  def test_changing_the_distance_does_not_accumulate_and_assemble_is_idempotent
+    g = groups.first
+    before = part_boxes(g)
+    @c.explode_cabinet(id, 100)
+    @c.explode_cabinet(id, 100) # same again: nothing moves further
+    @c.explode_cabinet(id, 50)
+    assert_in_delta(-50, (part_boxes(g)['B01-SIDE_LEFT'][0] - before['B01-SIDE_LEFT'][0]) * 25.4, 1e-6)
+    @c.assemble_cabinet(id)
+    @c.assemble_cabinet(id)
+    part_boxes(g).each { |k, v| v.zip(before[k]).each { |a, b| assert_in_delta b, a, 1e-9, k } }
+  end
+
+  def test_only_the_chosen_cabinet_moves
+    other = part_boxes(groups.last)
+    @c.explode_cabinet(id(0), 100)
+    assert_equal other, part_boxes(groups.last)
+  end
+
+  def test_exploding_is_one_undo_step_and_can_be_aborted_by_errors
+    starts = -> { @model.instance_variable_get(:@ops).count { |o| o.first == :start } }
+    n = starts.call
+    @c.explode_cabinet(id, 80)
+    assert_equal n + 1, starts.call
+    assert_equal :commit, @model.instance_variable_get(:@ops).last.first
+    assert_raises(ArgumentError) { @c.explode_cabinet(id, 99_999) }
+    assert_raises(ArgumentError) { @c.explode_cabinet(id, 'abc') }
+    assert_raises(ArgumentError) { @c.explode_cabinet(id, -5) }
+    assert_raises(ArgumentError) { @c.explode_cabinet('nope', 50) }
+  end
+
+  def test_model_check_warns_about_exploded_cabinets_and_skips_their_overlap_test
+    @c.explode_cabinet(id, 400)
+    issues = @c.validate['issues']
+    assert(issues.any? { |i| i['code'] == 'cabinet_exploded' })
+    refute(issues.any? { |i| i['code'] == 'cabinets_overlap' })
+    refute(issues.any? { |i| i['code'] == 'geometry_modified' })
+    @c.assemble_cabinet(id)
+    refute(@c.validate['issues'].any? { |i| i['code'] == 'cabinet_exploded' })
+  end
+
+  def test_editing_an_exploded_cabinet_rebuilds_it_assembled
+    @c.explode_cabinet(id, 200)
+    cab = @c.list['cabinets'].first
+    @c.update(cab['id'], cab['params'].merge('width' => 700))
+    assert_equal false, @c.assembly_state(id)['exploded_in_model']
+    refute(@c.validate['issues'].any? { |i| i['code'] == 'cabinet_exploded' })
+  end
+
+  def test_assembly_pdf_covers_every_cabinet
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, 'a.pdf')
+      assert @c.export('assembly', 'pdf', path)['ok']
+      bytes = File.binread(path)
+      assert_includes bytes, 'Assembly instructions'.b
+      %w[B01 B02].each { |l| assert_includes bytes, l.b }
+    end
+    empty = Sketchup.reset_model!
+    assert_raises(ArgumentError) { CabinetCraft::Interface::Controller.new.export('assembly', 'pdf', File.join(Dir.tmpdir, 'x.pdf')) }
+  end
+
+  def test_assembly_for_missing_cabinet_is_a_clean_failure
+    r = @c.assembly_state('nope')
+    assert_equal false, r['ok']
   end
 end

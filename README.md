@@ -108,6 +108,8 @@ the generator, registry, controller, undo operations and duplicate-ID repair.
   file is ignored). Custom materials travel with the model (restored on another machine if missing there).
 * PDF: dimensions are always millimetres; the writer supports Windows-1252 text only (other characters print as "?"); labels are laid
   out for 63.5 x 38.1 mm sheets (use the HTML export for other sizes).
-* Phase 6 so far: custom templates, company standards and cost estimation are implemented. Assembly documentation (steps, exploded view) is not implemented yet.
+* Phase 6 so far: custom templates, company standards and cost estimation are implemented. Assembly documentation is implemented too (ASSEMBLY tab: rule-based steps, assembled and exploded drawings, EXPLODE / ASSEMBLE buttons that move the parts in the SketchUp model reversibly, assembly PDF).
 * Cost figures are estimates from your own prices; anything unpriced is reported as a warning and counted as 0. Material cost follows the nested sheet count, and the nesting is a heuristic, not proven optimal.
 * Cost settings are stored in the model. Hardware unit prices are stored per machine (HARDWARE tab), so another machine opening the .skp needs the same prices entered.
+
+* Assembly steps come from part roles in a standard carcass-first order; they are not a manufacturer-verified procedure. Custom-template parts with unknown roles go into a generic step. The exploded view uses fixed directions per role (generic 'away from centre' for unknown roles, which can overlap), and the drawings use approximate painter's-order depth sorting. While a cabinet is exploded, the model check warns and skips its overlap test.
