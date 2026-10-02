@@ -103,4 +103,79 @@ class TestRunPlanner < Minitest::Test
       assert_operator r['widths'].max - r['widths'].min, :<=, 1.0 + 1e-9
     end
   end
+
+  # --- fillers -----------------------------------------------------------------------------------------------------------------
+  def filler(over = {})
+    { 'filler' => true }.merge(over)
+  end
+
+  def test_a_filler_takes_its_target_width_when_the_others_can_share_the_rest
+    r = P.plan(2400, [flex, flex, flex, filler])
+    assert_equal 2400, r['widths'].sum
+    assert_equal 50, r['widths'].last
+    assert_equal [783, 783, 784], r['widths'].first(3).sort # 2350 shared by three
+    assert_equal [true, 0.0, 0.0], [r['ok'], r['leftover'], r['shortfall']]
+  end
+
+  def test_with_fixed_cabinets_the_filler_closes_the_gap_exactly
+    r = P.plan(1900, [fixed(600), fixed(600), fixed(600), filler])
+    assert_equal [600, 600, 600, 100], r['widths']
+    assert r['ok']
+    assert_equal [600, 600, 600, 20], P.plan(1820, [fixed(600), fixed(600), fixed(600), filler])['widths']
+  end
+
+  def test_a_gap_larger_than_the_filler_maximum_is_reported
+    r = P.plan(2000, [fixed(600), fixed(600), fixed(600), filler])
+    assert_equal 150, r['widths'].last
+    assert_equal 50.0, r['leftover']
+    assert_match(/maximum.*50.0 mm of the wall stays empty/, r['issues'].join)
+  end
+
+  def test_a_gap_smaller_than_the_filler_minimum_does_not_fit
+    r = P.plan(1810, [fixed(600), fixed(600), fixed(600), filler])
+    assert_equal false, r['ok']
+    assert_equal 10.0, r['shortfall']
+  end
+
+  def test_saturated_cabinets_pass_the_remainder_to_the_filler
+    r = P.plan(2000, [flex(300, 900), flex(300, 900), filler])
+    assert_equal [900, 900], r['widths'].first(2) # at their maximum
+    assert_equal 150, r['widths'].last # the filler is limited too
+    assert_equal 50.0, r['leftover']
+    r2 = P.plan(1900, [flex(300, 900), flex(300, 900), filler('max' => 400)])
+    assert_equal [900, 900, 100], r2['widths']
+  end
+
+  def test_several_fillers_share_equally_and_may_sit_anywhere_in_the_row
+    r = P.plan(1900, [filler, fixed(900), fixed(800), filler])
+    assert_equal [100, 900, 800, 100].sum, r['widths'].sum
+    assert_equal r['widths'].first, r['widths'].last
+    assert_equal 100, r['widths'].first
+  end
+
+  def test_filler_limits_are_validated
+    [filler('min' => 0), filler('min' => 100, 'max' => 50), filler('width' => 10), filler('width' => 500)].each do |f|
+      assert_raises(ArgumentError, f.inspect) { P.plan(2000, [flex, f]) }
+    end
+    assert_equal [20.0, 150.0, 50.0], [P::FILLER_MIN, P::FILLER_MAX, P::FILLER_TARGET]
+  end
+
+  def test_property_fillers_stay_in_range_and_the_total_is_exact_when_feasible
+    rng = Random.new(21)
+    300.times do
+      items = Array.new(rng.rand(1..5)) { rng.rand < 0.4 ? fixed(rng.rand(300..900)) : flex(rng.rand(250..400), rng.rand(500..900)) }
+      items.insert(rng.rand(0..items.size), filler('min' => 20, 'max' => rng.rand(60..200), 'width' => rng.rand(20..60)))
+      length = rng.rand(800..5000)
+      r = P.plan(length, items)
+      items.each_with_index do |it, i|
+        w = r['widths'][i]
+        if it['filler'] then assert w >= 20 - 1e-6 && w <= it['max'] + 1e-6, "filler #{w}"
+        elsif it['fixed'] then assert_equal it['width'], w
+        else assert w >= it['min'] - 1e-6 && w <= it['max'] + 1e-6
+        end
+      end
+      assert_in_delta length, r['widths'].sum + r['leftover'] - r['shortfall'], 1e-6
+      assert r['leftover'].zero? || r['shortfall'].zero?
+    end
+  end
 end

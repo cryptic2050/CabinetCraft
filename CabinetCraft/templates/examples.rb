@@ -134,10 +134,10 @@ module CabinetCraft
       # The blind part sits behind the neighbouring run, so only the door width is usable.
       BLIND_CORNER_BASE = {
         'name' => 'Blind corner base', 'category' => 'CORNER',
-        'description' => 'Base cabinet with a fixed blind panel on one side that tucks behind the neighbouring run, and a door on the other.',
+        'description' => 'Base cabinet with a fixed blind panel on one side that tucks behind the neighbouring run, and a door on the other. The blind panel should be at least as wide as the depth of the neighbouring run (default 600 mm for 560 mm cabinets).',
         'parameters' => [
-          { 'key' => 'width', 'label' => 'Width', 'type' => 'length', 'default' => 900, 'min' => 600, 'max' => 1400, 'group' => 'DIMENSIONS' },
-          { 'key' => 'blind', 'label' => 'Blind panel width', 'type' => 'length', 'default' => 350, 'min' => 100, 'max' => 800, 'group' => 'DIMENSIONS' },
+          { 'key' => 'width', 'label' => 'Width', 'type' => 'length', 'default' => 1000, 'min' => 600, 'max' => 1400, 'group' => 'DIMENSIONS' },
+          { 'key' => 'blind', 'label' => 'Blind panel width', 'type' => 'length', 'default' => 600, 'min' => 100, 'max' => 800, 'group' => 'DIMENSIONS' },
           { 'key' => 'blind_right', 'label' => 'Blind panel on the right', 'type' => 'toggle', 'default' => 1, 'group' => 'DIMENSIONS' },
           { 'key' => 'depth', 'label' => 'Depth', 'type' => 'length', 'default' => 560, 'min' => 300, 'max' => 700, 'group' => 'DIMENSIONS' },
           { 'key' => 'height', 'label' => 'Carcass height', 'type' => 'length', 'default' => 720, 'min' => 300, 'max' => 1000, 'group' => 'DIMENSIONS' },
@@ -157,7 +157,8 @@ module CabinetCraft
         ],
         'constraints' => [
           { 'expr' => 'door_w >= 250', 'message' => 'The door would be narrower than 250 mm: reduce the blind panel or widen the cabinet', 'severity' => 'error' },
-          { 'expr' => 'blind <= width / 2', 'message' => 'The blind panel is wider than half the cabinet', 'severity' => 'warning' }
+          { 'expr' => 'door_w >= 300', 'message' => 'The door is narrower than 300 mm: reach into the cabinet is limited', 'severity' => 'warning' },
+          { 'expr' => 'blind >= depth + 10', 'message' => 'The blind panel is narrower than the cabinet depth: the neighbouring run will block the door (make it at least depth + 10 mm)', 'severity' => 'warning' }
         ],
         'panels' => [
           { 'key' => 'bottom', 'name' => 'Bottom', 'role' => 'bottom', 'material' => 'board', 'size' => ['width', 'depth', 'board_t'], 'origin' => ['0', '0', 'toe'],
@@ -361,10 +362,22 @@ module CabinetCraft
                        { 'id' => 'confirmat', 'qty' => '8 + 4 * dividers', 'part' => 'cabinet', 'detail' => 'top, bottom and dividers' }]
       }.freeze
 
+      # A flat strip that closes the gap between the last cabinet of a run and a wall. Runs and corner layouts size it automatically.
+      FILLER_STRIP = {
+        'name' => 'Filler strip', 'category' => 'FILLERS',
+        'description' => 'A flat front-material strip standing in the door plane, used to close a gap at a wall. Runs size it to the exact gap (20-150 mm); scribe it to the wall on site.',
+        'parameters' => [length('width', 'Width', 50, 20, 300), length('height', 'Height', 720, 100, 2400), length('toe', 'Height above floor', 100, 0, 300),
+                         { 'key' => 'front', 'label' => 'Front material', 'type' => 'material', 'default' => 'mdf_18', 'group' => 'MATERIAL' }],
+        'derived' => [],
+        'constraints' => [{ 'expr' => 'width >= 20', 'message' => 'A filler narrower than 20 mm cannot be fixed', 'severity' => 'error' }],
+        'panels' => [panel('filler', 'Filler strip', 'panel', 'front', ['width', 'front_t', 'height'], ['0', '-front_t', 'toe'], 'y', 'z', { 'left' => '2', 'right' => '2' })],
+        'hardware' => []
+      }.freeze
+
       ALL = { 'open_shelf_unit' => OPEN_SHELF_UNIT, 'floating_tv_unit' => FLOATING_TV_UNIT,
               'l_shaped_corner_base' => L_SHAPED_CORNER_BASE, 'blind_corner_base' => BLIND_CORNER_BASE,
               'wall_cabinet' => WALL_CABINET, 'tall_cabinet' => TALL_CABINET, 'wardrobe' => WARDROBE, 'vanity_unit' => VANITY_UNIT,
-              'tv_base_cabinet' => TV_BASE_CABINET }.freeze
+              'tv_base_cabinet' => TV_BASE_CABINET, 'filler_strip' => FILLER_STRIP }.freeze
     end
   end
 end

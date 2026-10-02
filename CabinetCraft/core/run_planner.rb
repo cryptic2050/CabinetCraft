@@ -10,9 +10,14 @@ module CabinetCraft
   module RunPlanner
     DEFAULT_MIN = 300.0
     DEFAULT_MAX = 900.0
+    FILLER_MIN = 20.0
+    FILLER_MAX = 150.0
+    FILLER_TARGET = 50.0
     EPS = 1e-9
 
-    Item = Struct.new(:fixed, :width, :min, :max, keyword_init: true)
+    # filler: a strip that closes the gap at a wall. It is sized last: the other cabinets are planned for the wall length minus the
+    # fillers' target widths, then each filler takes an equal share of what is left, within its own min / max.
+    Item = Struct.new(:fixed, :width, :min, :max, :filler, keyword_init: true)
 
     module_function
 
@@ -26,14 +31,36 @@ module CabinetCraft
       raise ArgumentError, 'Add at least one cabinet to the run' if items.empty?
 
       list = items.each_with_index.map { |raw, i| normalize(raw, i, step) }
-      widths = list.map { |it| it.fixed ? it.width : nil }
-      free = list.each_index.reject { |i| list[i].fixed }
-      remaining = length - widths.compact.sum
+      fillers = list.each_index.select { |i| list[i].filler }
+      widths = list.map { |it| it.fixed && !it.filler ? it.width : nil }
+      free = list.each_index.reject { |i| list[i].fixed || list[i].filler }
+      target = fillers.sum { |i| list[i].width }
+      remaining = length - widths.compact.sum - target
       distribute(widths, list, free, remaining, step)
+      size_fillers(widths, list, fillers, length, step)
       finish(widths, length, list)
     end
 
+    # Each filler gets an equal share of what the other cabinets leave, limited to its own min / max (rounded to the step).
+    def size_fillers(widths, list, fillers, length, step)
+      return if fillers.empty?
+
+      left = length - widths.compact.sum
+      share = left / fillers.size
+      fillers.each { |i| widths[i] = floor_to(share.clamp(list[i].min, list[i].max), step) }
+      extra = ((left - fillers.sum { |i| widths[i] }) / step + EPS).floor
+      fillers.each do |i|
+        break if extra <= 0
+        next if widths[i] + step > list[i].max + EPS
+
+        widths[i] += step
+        extra -= 1
+      end
+    end
+
     def normalize(raw, index, step)
+      return normalize_filler(raw, index, step) if raw['filler']
+
       fixed = raw['fixed'] ? true : false
       min = Float(raw['min'] || DEFAULT_MIN)
       max = Float(raw['max'] || DEFAULT_MAX)
@@ -44,6 +71,17 @@ module CabinetCraft
       raise ArgumentError, "Cabinet #{index + 1}: width must be positive" if fixed && !width.positive?
 
       Item.new(fixed: fixed, width: width, min: ceil_to(min, step), max: floor_to(max, step))
+    end
+
+    def normalize_filler(raw, index, step)
+      min = Float(raw['min'] || FILLER_MIN)
+      max = Float(raw['max'] || FILLER_MAX)
+      target = Float(raw['width'] || FILLER_TARGET)
+      raise ArgumentError, "Filler #{index + 1}: minimum width must be positive" unless min.positive?
+      raise ArgumentError, "Filler #{index + 1}: minimum width is larger than the maximum" if min > max + EPS
+      raise ArgumentError, "Filler #{index + 1}: target width must be between #{min} and #{max} mm" unless target.between?(min - EPS, max + EPS)
+
+      Item.new(fixed: false, width: target, min: ceil_to(min, step), max: floor_to(max, step), filler: true)
     end
 
     def ceil_to(v, step)
@@ -98,6 +136,11 @@ module CabinetCraft
       issues << "The row is #{shortfall.round(1)} mm too long even at the minimum widths: remove a cabinet or reduce a fixed width" if shortfall.positive?
       list.each_with_index do |it, i|
         next if it.fixed
+
+        if it.filler
+          issues << "Filler #{i + 1} would have to be #{widths[i].round(1)} mm: that is its maximum, #{leftover.round(1)} mm of the wall stays empty" if leftover.positive? && (widths[i] - it.max).abs < EPS
+          next
+        end
 
         issues << "Cabinet #{i + 1} is at its minimum width (#{widths[i].round(1)} mm)" if (widths[i] - it.min).abs < EPS && it.min < it.max
         issues << "Cabinet #{i + 1} is at its maximum width (#{widths[i].round(1)} mm)" if (widths[i] - it.max).abs < EPS && it.min < it.max

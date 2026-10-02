@@ -13,7 +13,7 @@ require 'sketchup.rb'
   exporters/dxf_exporter exporters/svg_exporter exporters/pdf_writer exporters/pdf_reports
   validation/collision_checker validation/machining_checker validation/validator
   scene/containers scene/attributes scene/registry scene/settings_store scene/project_store scene/explode scene/model_checker
-  ui/layout_commands ui/overview_commands ui/production_commands ui/controller ui/dialog
+  ui/layout_commands ui/overview_commands ui/production_commands ui/run_edit_commands ui/controller ui/dialog
 ].each { |f| require File.join(CabinetCraft::PLUGIN_ROOT, f) }
 
 module CabinetCraft

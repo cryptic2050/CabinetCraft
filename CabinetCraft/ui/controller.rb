@@ -23,6 +23,7 @@ require_relative '../core/run'
 require_relative 'layout_commands'
 require_relative 'overview_commands'
 require_relative 'production_commands'
+require_relative 'run_edit_commands'
 require_relative '../manufacturing/production'
 require_relative '../manufacturing/dashboard'
 require_relative '../manufacturing/assembly'
@@ -46,6 +47,7 @@ module CabinetCraft
       include LayoutCommands
       include OverviewCommands
       include ProductionCommands
+      include RunEditCommands
 
       PUBLIC_METHODS = %w[bootstrap preview create update select list parts_list cutting_list hardware_state
                           add_hardware delete_hardware set_hinge_rules set_hardware_setting
@@ -57,8 +59,9 @@ module CabinetCraft
                           save_preset delete_preset standards_state save_standards reset_standards
                           cost_state save_cost_settings set_hardware_price
                           assembly_state explode_cabinet assemble_cabinet plan_run create_run runs_state restretch_run unlink_run
-                          plan_corner create_corner_layout layouts_state unlink_layout restretch_layout dashboard_state
+                          plan_corner create_corner_layout layouts_state unlink_layout restretch_layout change_layout_corner dashboard_state
                           production_state set_part_stage set_cabinet_stage set_sheet_stage
+                          repair_run add_to_run remove_from_run
                           machining_state set_machining_setting add_pattern delete_pattern select_machine save_machine
                           delete_machine save_post delete_post cnc_check cnc_preview match_nesting_to_router].freeze
 
@@ -370,7 +373,7 @@ module CabinetCraft
       # Pure calculation: widths for a row of cabinets along a wall of `length` mm. Nothing is changed in the model.
       def plan_run(length, items)
         list = run_items(items)
-        plan = RunPlanner.plan(length, list.map { |i| i.slice('fixed', 'width', 'min', 'max') })
+        plan = RunPlanner.plan(length, list.map { |i| planner_item(i) })
         plan.merge('items' => list.each_with_index.map { |i, n| { 'type' => i['type'], 'width' => plan['widths'][n], 'fixed' => i['fixed'] } })
       rescue ArgumentError, TypeError => e
         { 'ok' => false, 'widths' => [], 'issues' => [e.message], 'items' => [] }
@@ -401,15 +404,17 @@ module CabinetCraft
           end
           snapshot_materials
           snapshot_templates
-          run = Run.build(name: next_run_name, length: length, items: list.each_with_index.map { |it, n| run_item(it, created[n]['id'], plan['widths'][n]) })
+          run = Run.build(name: next_run_name, length: length, items: list.each_with_index.map { |it, n| run_item(it, created[n]['id'], plan['widths'][n], created[n]['params']) })
           save_run(run)
         end
         { 'ok' => true, 'created' => created, 'plan' => plan, 'runs' => runs_state['runs'] }
       end
 
-      def run_item(item, cabinet_id, width)
-        { 'cabinet_id' => cabinet_id, 'fixed' => item['fixed'] ? true : false, 'width' => item['fixed'] ? width : nil, 'min' => item['min'] || RunPlanner::DEFAULT_MIN,
-          'max' => item['max'] || RunPlanner::DEFAULT_MAX }
+      def run_item(item, cabinet_id, width, params = nil)
+        filler = item['filler'] ? true : false
+        { 'cabinet_id' => cabinet_id, 'fixed' => !filler && item['fixed'] ? true : false, 'filler' => filler, 'type' => item['type'], 'params' => params,
+          'width' => filler ? (item['width'] || RunPlanner::FILLER_TARGET) : (item['fixed'] ? width : nil),
+          'min' => item['min'] || (filler ? RunPlanner::FILLER_MIN : RunPlanner::DEFAULT_MIN), 'max' => item['max'] || (filler ? RunPlanner::FILLER_MAX : RunPlanner::DEFAULT_MAX) }
       end
 
       # --- Linked runs ---------------------------------------------------------------------------
@@ -438,7 +443,7 @@ module CabinetCraft
       def run_summary(run)
         plan = (run.plan rescue nil) # rubocop:disable Style/RescueModifier
         found = run.items.map { |i| Scene::Registry.find(model, i['cabinet_id']) }
-        base = found.first&.first&.then { |g| along(g, run.axis) } # positions are judged against the first cabinet
+        base = found.first&.first&.then { |g| along(g, run.axis, run.dir) } # positions are judged against the first cabinet
         x = 0.0
         members = run.items.each_with_index.map do |item, n|
           group, cab = found[n]
@@ -447,13 +452,13 @@ module CabinetCraft
           x += expected_w.to_f
           status = if cab.nil? then 'missing'
                    elsif expected_w && (cab.params['width'].to_f - expected_w).abs > 0.01 then 'resized'
-                   elsif expected_x && (along(group, run.axis) - expected_x).abs > 0.5 then 'moved'
+                   elsif expected_x && (along(group, run.axis, run.dir) - expected_x).abs > 0.5 then 'moved'
                    else 'ok'
                    end
-          { 'n' => n + 1, 'cabinet_id' => item['cabinet_id'], 'label' => cab&.label, 'type' => cab&.type, 'fixed' => item['fixed'], 'min' => item['min'], 'max' => item['max'],
+          { 'n' => n + 1, 'cabinet_id' => item['cabinet_id'], 'label' => cab&.label, 'type' => cab&.type, 'fixed' => item['fixed'], 'filler' => item['filler'] ? true : false, 'min' => item['min'], 'max' => item['max'],
             'width' => cab&.params&.fetch('width', nil), 'expected_width' => expected_w, 'status' => status }
         end
-        { 'id' => run.id, 'name' => run.name, 'length' => run.length, 'axis' => run.axis, 'members' => members, 'in_sync' => members.all? { |m| m['status'] == 'ok' },
+        { 'id' => run.id, 'name' => run.name, 'length' => run.length, 'axis' => run.axis, 'dir' => run.dir, 'members' => members, 'in_sync' => members.all? { |m| m['status'] == 'ok' },
           'leftover' => plan && plan['leftover'], 'fits' => plan ? plan['ok'] : false }
       end
 
@@ -502,11 +507,13 @@ module CabinetCraft
         prepared = stretch_prepare(members, plan['widths'], mode)
         return prepared if prepared.is_a?(Hash)
 
-        { run: updated, plan: plan, prepared: prepared, base: base || along(members.first[0], updated.axis) }
+        # keep each member's snapshot (type and parameters) current, so a deleted one can be recreated as it was
+        items = updated.items.each_with_index.map { |it, n| it.merge('type' => members[n][1].type, 'params' => (prepared[n][1] || members[n][1]).params) }
+        { run: updated.with_items(items), plan: plan, prepared: prepared, base: base || along(members.first[0], updated.axis, updated.dir) }
       end
 
       def apply_restretch(job)
-        stretch_apply(job[:prepared], job[:base], job[:run].axis)
+        stretch_apply(job[:prepared], job[:base], job[:run].axis, job[:run].dir)
         save_run(job[:run])
       end
 
@@ -540,16 +547,19 @@ module CabinetCraft
         out
       end
 
-      # Position (mm) of a group's minimum corner along a model axis ('x' or 'y').
-      def along(group, axis)
-        Units.from_sketchup(axis == 'y' ? group.bounds.min.y : group.bounds.min.x)
+      # Position (mm) of a group along a run's advance direction: its minimum corner along the model axis ('x' or 'y') for a row advancing
+      # towards +, or the negated maximum corner for a row advancing towards - (so the position grows along the row either way).
+      def along(group, axis, dir = 1)
+        b = group.bounds
+        edge = dir == 1 ? b.min : b.max
+        Units.from_sketchup(dir * (axis == 'y' ? edge.y : edge.x))
       end
 
-      def stretch_apply(prepared, base, axis = 'x')
+      def stretch_apply(prepared, base, axis = 'x', dir = 1)
         pos = base
         prepared.each do |group, new_cab, width|
           Generators::CabinetGenerator.rebuild(group, new_cab) if new_cab
-          delta = Units.to_sketchup(pos - along(group, axis))
+          delta = Units.to_sketchup(dir * (pos - along(group, axis, dir)))
           if delta.abs > 1e-9
             vec = axis == 'y' ? Geom::Vector3d.new(0, delta, 0) : Geom::Vector3d.new(delta, 0, 0)
             group.transform!(Geom::Transformation.translation(vec))
@@ -559,13 +569,28 @@ module CabinetCraft
         snapshot_materials
       end
 
+      def planner_item(item)
+        item.slice('fixed', 'width', 'min', 'max', 'filler')
+      end
+
+      # 'example:filler_strip' (a bundled cabinet that is not installed yet) becomes the installed template's type, adding it if needed.
+      def resolve_type(type)
+        return type unless type.to_s.start_with?('example:')
+
+        ex = Templates::Examples::ALL[type.to_s.sub('example:', '')] or raise ArgumentError, "Unknown cabinet type '#{type}'"
+        (Templates.config.templates.find { |t| t.name == ex['name'] } || Templates.config.save_template(JSON.parse(JSON.generate(ex)))).id
+      end
+
       def run_items(items)
         raise ArgumentError, 'Add at least one cabinet to the run' unless items.is_a?(Array) && !items.empty?
 
         items.map do |raw|
           it = raw.transform_keys(&:to_s)
+          it['type'] = resolve_type(it['type'])
           raise ArgumentError, "Unknown cabinet type '#{it['type']}'" unless Library.entry(it['type'])
 
+          it['filler'] = it['filler'] ? true : false
+          it['fixed'] = false if it['filler']
           if it['fixed'] && it['width'].to_s.strip.empty?
             it['width'] = (it['params'] || {})['width'] || Library.defaults_for(it['type'])['width'] || Parameter.defaults['width']
           end

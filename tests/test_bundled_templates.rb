@@ -34,7 +34,7 @@ class TestBundledTemplates < Minitest::Test
     Ex::ALL.each_key do |k|
       b, = build(k)
       assert b.result.ok?, "#{k}: #{b.result.issues.map(&:message)}"
-      assert_operator b.panels.size, :>=, 6, k
+      assert_operator b.panels.size, :>=, (k == 'filler_strip' ? 1 : 6), k # a filler is a single strip
       assert_empty pairs_overlapping(b.panels), "#{k} defaults overlap"
     end
   end

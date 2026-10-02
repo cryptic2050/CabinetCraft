@@ -12,13 +12,13 @@ module CabinetCraft
       # Pure calculation, nothing is changed in the model.
       def plan_corner(spec)
         s = layout_spec(spec)
-        plan = CornerLayout.plan(s['wall_a'], s['wall_b'], kind: s['kind'], depth: s['depth'], clearance: s['clearance'], corner: s['corner'])
+        plan = CornerLayout.plan(s['wall_a'], s['wall_b'], kind: s['kind'], depth: s['depth'], clearance: s['clearance'], corner: s['corner'], hand: s['hand'])
         run_a = side_plan(plan, 'a', s['run_a'])
         run_b = side_plan(plan, 'b', s['run_b'])
         issues = plan['issues'] + [run_a, run_b].compact.flat_map { |r| r['ok'] ? [] : r['issues'] }
         rects = CornerLayout.rectangles(plan, run_a ? run_a['widths'] : [], run_b ? run_b['widths'] : [])
         { 'ok' => plan['ok'] && [run_a, run_b].compact.all? { |r| r['ok'] }, 'issues' => issues, 'layout' => plan, 'run_a' => run_a, 'run_b' => run_b,
-          'rects' => rects, 'overlaps' => CornerLayout.overlapping(rects) }
+          'rects' => rects, 'overlaps' => CornerLayout.overlapping(rects), 'warnings' => plan['ok'] ? swing_warnings(s, plan, run_a) : [] }
       rescue ArgumentError, TypeError => e
         { 'ok' => false, 'issues' => [e.message], 'layout' => nil, 'run_a' => nil, 'run_b' => nil, 'rects' => [], 'overlaps' => [] }
       end
@@ -31,6 +31,7 @@ module CabinetCraft
 
         lay = plan['layout']
         corner = prepare_corner(s, lay)
+        specs = { 'a' => plan['run_a'] ? run_items(s['run_a']) : [], 'b' => plan['run_b'] ? run_items(s['run_b']) : [] }
         runs = { 'a' => prepare_side(s['run_a'], plan['run_a'], s['depth']), 'b' => prepare_side(s['run_b'], plan['run_b'], s['depth']) }
         created = { 'corner' => nil, 'a' => [], 'b' => [] }
         layout = nil
@@ -39,18 +40,49 @@ module CabinetCraft
           ox = (s['origin'] || [Scene::Registry.next_x_mm(model), 0.0])[0]
           oy = (s['origin'] || [0.0, 0.0])[1]
           created['corner'] = place_one(corner[0], corner[1], lay['corner']['frame'], ox, oy) if corner
-          created_a = place_side(runs['a'], plan['run_a'], lay['a']['start'], :a, lay, ox, oy)
-          created_b = place_side(runs['b'], plan['run_b'], lay['b']['start'], :b, lay, ox, oy)
+          created_a = place_side(runs['a'], specs['a'], plan['run_a'], lay['a']['start'], :a, lay, ox, oy)
+          created_b = place_side(runs['b'], specs['b'], plan['run_b'], lay['b']['start'], :b, lay, ox, oy)
           created['a'] = created_a[:cabinets]
           created['b'] = created_b[:cabinets]
           snapshot_materials
           snapshot_templates
           layout = CornerLayout::Record.new(id: SecureRandom.uuid, name: next_layout_name, kind: lay['kind'], wall_a: s['wall_a'], wall_b: s['wall_b'], depth: s['depth'],
                                             clearance: s['clearance'], origin: [ox, oy], corner_cabinet_id: created['corner']&.fetch('id', nil),
-                                            run_a_id: created_a[:run_id], run_b_id: created_b[:run_id])
+                                            run_a_id: created_a[:run_id], run_b_id: created_b[:run_id], hand: lay['hand'])
           save_layout(layout)
         end
         { 'ok' => true, 'created' => created, 'layout' => layout_summary(layout), 'plan' => plan }
+      end
+
+      # Door swing and blind panel warnings (see CornerLayout.warnings), using the real cabinets of this spec.
+      def swing_warnings(spec, plan, run_a)
+        a1 = run_a && spec['run_a'].first
+        a1_door = a1 && first_door_width(run_items([a1]).first, run_a['widths'].first)
+        blind = plan['kind'] == 'blind' ? blind_panel_width(spec) : nil
+        CornerLayout.warnings(plan, a1_door: a1_door, blind: blind)
+      rescue ArgumentError, KeyError
+        []
+      end
+
+      def first_door_width(item, width)
+        values = preview(item['type'], (item['params'] || {}).merge('width' => width))['values'] || {}
+        w = values['door_widths']&.first || values['door_w']
+        w && w.to_f.positive? ? w.to_f : nil
+      end
+
+      # The blind panel width of the chosen corner cabinet: given explicitly, or the template's default (read without installing anything).
+      def blind_panel_width(spec)
+        c = spec['corner']
+        raw = (c['params'] || {})['blind'] || c['blind']
+        type = c['type'].to_s
+        if raw.nil? && !type.empty?
+          raw = if type.start_with?('example:')
+                  Templates::Examples::ALL[type.sub('example:', '')]&.fetch('parameters', [])&.find { |p| p['key'] == 'blind' }&.fetch('default', nil)
+                elsif Library.entry(type)
+                  Library.defaults_for(type)['blind']
+                end
+        end
+        raw && Float(raw)
       end
 
       def layouts_state
@@ -74,15 +106,12 @@ module CabinetCraft
         rec = stored_layouts.find { |l| l.id == layout_id } or raise ArgumentError, 'That layout no longer exists'
         rec = rec.with_walls(wall_a.nil? || wall_a.to_s.strip.empty? ? rec.wall_a : wall_a, wall_b.nil? || wall_b.to_s.strip.empty? ? rec.wall_b : wall_b)
         corner_group, corner = layout_corner(rec)
-        plan = CornerLayout.plan(rec.wall_a, rec.wall_b, kind: rec.kind, depth: rec.depth, clearance: rec.clearance, corner: corner_dims(rec, corner))
+        plan = CornerLayout.plan(rec.wall_a, rec.wall_b, kind: rec.kind, depth: rec.depth, clearance: rec.clearance, corner: corner_dims(rec, corner), hand: rec.hand)
         raise ArgumentError, plan['issues'].first.to_s unless plan['ok']
 
         ox, oy = rec.origin
-        jobs = []
-        jobs << restretch_job(rec.run_a_id, plan['a']['length'], nil, mode, base: ox + plan['a']['start']) if rec.run_a_id
-        jobs << restretch_job(rec.run_b_id, plan['b']['length'], nil, mode, base: oy + plan['b']['start']) if rec.run_b_id
-        pending = jobs.select { |j| j.key?('needs_confirmation') }
-        return { 'ok' => false, 'updated' => false, 'needs_confirmation' => true, 'affected' => pending.flat_map { |j| j['affected'] } } if pending.any?
+        jobs = layout_jobs(rec, plan, mode)
+        return jobs if jobs.is_a?(Hash)
 
         in_operation('CabinetCraft: Resize corner layout', reidentify: false) do
           align_corner(corner_group, rec, ox, oy)
@@ -90,6 +119,38 @@ module CabinetCraft
           save_layout(rec)
         end
         { 'ok' => true, 'updated' => true, 'layout' => layout_summary(rec), 'plan' => plan }
+      end
+
+      # Replaces the corner of an existing layout (none / blind / L-shaped, or a different size or cabinet) and re-plans both runs for it. The old
+      # corner cabinet is deleted from the model. corner: { 'type', 'width' } for blind, { 'type', 'width_a', 'width_b' } for L-shaped (plus 'params').
+      # One undo step. mode: 'keep' / 'reset' for overrides the new run widths would change.
+      def change_layout_corner(layout_id, kind, corner = {}, mode = nil)
+        rec = stored_layouts.find { |l| l.id == layout_id } or raise ArgumentError, 'That layout no longer exists'
+        raise ArgumentError, "Corner kind must be one of #{CornerLayout::KINDS.join(', ')}" unless CornerLayout::KINDS.include?(kind)
+
+        old_entry = rec.corner_cabinet_id && Scene::Registry.find_entry(model, rec.corner_cabinet_id)
+        raise ArgumentError, "#{old_entry.cabinet.label} is inside another group or component: corner layouts can only replace cabinets at the top level of the model" if old_entry&.nested?
+
+        corner = (corner || {}).transform_keys(&:to_s)
+        plan = CornerLayout.plan(rec.wall_a, rec.wall_b, kind: kind, depth: rec.depth, clearance: rec.clearance, corner: corner, hand: rec.hand)
+        raise ArgumentError, plan['issues'].first.to_s unless plan['ok']
+
+        new_corner = prepare_corner({ 'kind' => kind, 'corner' => corner }, plan)
+        jobs = layout_jobs(rec, plan, mode)
+        return jobs if jobs.is_a?(Hash)
+
+        ox, oy = rec.origin
+        updated = nil
+        in_operation('CabinetCraft: Change corner cabinet', reidentify: false) do
+          old_entry&.entity&.erase!
+          created = new_corner ? place_one(new_corner[0], new_corner[1], plan['corner']['frame'], ox, oy) : nil
+          jobs.each { |j| apply_restretch(j) }
+          snapshot_materials
+          snapshot_templates
+          updated = CornerLayout::Record.new(**rec.to_h.transform_keys(&:to_sym).merge(kind: kind, corner_cabinet_id: created&.fetch('id', nil)))
+          save_layout(updated)
+        end
+        { 'ok' => true, 'updated' => true, 'layout' => layout_summary(updated), 'plan' => plan }
       end
 
       def stored_layouts
@@ -113,7 +174,7 @@ module CabinetCraft
         a = rec.run_a_id && runs[rec.run_a_id] ? run_summary(runs[rec.run_a_id]) : nil
         b = rec.run_b_id && runs[rec.run_b_id] ? run_summary(runs[rec.run_b_id]) : nil
         corner_ok = rec.kind == 'none' || !group.nil?
-        { 'id' => rec.id, 'name' => rec.name, 'kind' => rec.kind, 'wall_a' => rec.wall_a, 'wall_b' => rec.wall_b, 'depth' => rec.depth, 'clearance' => rec.clearance,
+        { 'id' => rec.id, 'name' => rec.name, 'kind' => rec.kind, 'hand' => rec.hand, 'wall_a' => rec.wall_a, 'wall_b' => rec.wall_b, 'depth' => rec.depth, 'clearance' => rec.clearance,
           'corner' => rec.kind == 'none' ? nil : { 'cabinet_id' => rec.corner_cabinet_id, 'label' => corner&.label, 'present' => !group.nil? },
           'run_a' => a, 'run_b' => b,
           'in_sync' => corner_ok && [a, b].compact.all? { |r| r['in_sync'] } && (rec.run_a_id.nil? || !a.nil?) && (rec.run_b_id.nil? || !b.nil?) }
@@ -121,13 +182,25 @@ module CabinetCraft
 
       private
 
+      # Resize jobs for both runs of a layout under `plan` (nothing is changed), or the reply to give when manual overrides need confirming.
+      def layout_jobs(rec, plan, mode)
+        ox, oy = rec.origin
+        jobs = []
+        jobs << restretch_job(rec.run_a_id, plan['a']['length'], nil, mode, base: CornerLayout.direction_a(rec.hand) * ox + plan['a']['start']) if rec.run_a_id
+        jobs << restretch_job(rec.run_b_id, plan['b']['length'], nil, mode, base: oy + plan['b']['start']) if rec.run_b_id
+        pending = jobs.select { |j| j.key?('needs_confirmation') }
+        return { 'ok' => false, 'updated' => false, 'needs_confirmation' => true, 'affected' => pending.flat_map { |j| j['affected'] } } if pending.any?
+
+        jobs
+      end
+
       def layout_spec(raw)
         raise ArgumentError, 'Layout details are missing' unless raw.is_a?(Hash)
 
         s = raw.transform_keys(&:to_s)
         corner = (s['corner'] || {}).transform_keys(&:to_s)
         { 'wall_a' => s['wall_a'], 'wall_b' => s['wall_b'], 'kind' => s['kind'] || 'none', 'depth' => s['depth'] || CornerLayout::DEFAULT_DEPTH,
-          'clearance' => s['clearance'] || CornerLayout::DEFAULT_CLEARANCE, 'corner' => corner, 'run_a' => s['run_a'] || DEFAULT_SIDE, 'run_b' => s['run_b'] || DEFAULT_SIDE,
+          'clearance' => s['clearance'] || CornerLayout::DEFAULT_CLEARANCE, 'hand' => s['hand'] || 'left', 'corner' => corner, 'run_a' => s['run_a'] || DEFAULT_SIDE, 'run_b' => s['run_b'] || DEFAULT_SIDE,
           'origin' => s['origin'].is_a?(Array) && s['origin'].size == 2 ? s['origin'].map { |v| Float(v) } : nil }
       end
 
@@ -136,7 +209,7 @@ module CabinetCraft
         return nil if items.nil? || items.empty?
         return { 'ok' => false, 'widths' => [], 'issues' => plan['issues'] } unless plan['ok']
 
-        RunPlanner.plan(plan[side]['length'], run_items(items).map { |i| i.slice('fixed', 'width', 'min', 'max') })
+        RunPlanner.plan(plan[side]['length'], run_items(items).map { |i| planner_item(i) })
       end
 
       def schema_keys(type)
@@ -147,7 +220,7 @@ module CabinetCraft
       def prepare_corner(s, lay)
         return nil if s['kind'] == 'none'
 
-        type = s['corner']['type'].to_s
+        type = resolve_type(s['corner']['type'].to_s) # a bundled corner cabinet is added to the templates on first use
         raise ArgumentError, 'Choose a corner cabinet type' if type.empty?
         raise ArgumentError, "Unknown cabinet type '#{type}'" unless Library.entry(type)
 
@@ -157,9 +230,13 @@ module CabinetCraft
         raise ArgumentError, "'#{type}' has no #{missing.join(' / ')} parameter: it cannot be used as a #{s['kind'].tr('_', '-')} corner cabinet" if missing.any?
 
         params = (s['corner']['params'] || {}).transform_keys(&:to_s)
-        sizes = s['kind'] == 'blind' ? { 'width' => lay['corner']['width'] } : { 'width_a' => lay['corner']['width_a'], 'width_b' => lay['corner']['width_b'] }
+        right = lay['hand'] == 'right'
+        sizes = if s['kind'] == 'blind' then { 'width' => lay['corner']['width'] }
+                elsif right then { 'width_a' => lay['corner']['width_b'], 'width_b' => lay['corner']['width_a'] } # the cabinet is turned: its arms swap places
+                else { 'width_a' => lay['corner']['width_a'], 'width_b' => lay['corner']['width_b'] }
+                end
         sizes['depth'] = lay['depth'] if keys.include?('depth')
-        sizes['blind_right'] = '1' if s['kind'] == 'blind' && keys.include?('blind_right') # blind side towards the corner
+        sizes['blind_right'] = right ? '0' : '1' if s['kind'] == 'blind' && keys.include?('blind_right') # blind side towards the corner
         prepared_cabinet(type, params.merge(sizes), 'The corner cabinet')
       end
 
@@ -191,18 +268,18 @@ module CabinetCraft
       end
 
       # Creates the cabinets of one run and stores the run. Returns { cabinets:, run_id: }.
-      def place_side(prepared, run_plan, start, side, lay, ox, oy)
+      def place_side(prepared, specs, run_plan, start, side, lay, ox, oy)
         return { cabinets: [], run_id: nil } if prepared.empty?
 
         pos = start
         cabinets = prepared.each_with_index.map do |(type, params), n|
           w = run_plan['widths'][n]
-          frame = side == :a ? CornerLayout.frame_a(pos, w, lay['depth']) : CornerLayout.frame_b(pos, w, lay['depth'])
+          frame = side == :a ? CornerLayout.frame_a(pos, w, lay['depth'], lay['hand']) : CornerLayout.frame_b(pos, w, lay['depth'], lay['hand'])
           pos += w
           place_one(type, params, frame, ox, oy)
         end
-        items = prepared.each_with_index.map { |_, n| { 'cabinet_id' => cabinets[n]['id'], 'fixed' => false, 'min' => RunPlanner::DEFAULT_MIN, 'max' => RunPlanner::DEFAULT_MAX } }
-        run = Run.build(name: next_run_name, length: lay[side.to_s]['length'], items: items, axis: side == :a ? 'x' : 'y')
+        items = prepared.each_index.map { |n| run_item(specs[n], cabinets[n]['id'], run_plan['widths'][n], cabinets[n]['params']) }
+        run = Run.build(name: next_run_name, length: lay[side.to_s]['length'], items: items, axis: side == :a ? 'x' : 'y', dir: side == :a ? CornerLayout.direction_a(lay['hand']) : 1)
         save_run(run)
         { cabinets: cabinets, run_id: run.id }
       end
@@ -220,16 +297,19 @@ module CabinetCraft
       def corner_dims(rec, cab)
         case rec.kind
         when 'blind' then { 'width' => cab.params['width'] }
-        when 'l_shaped' then { 'width_a' => cab.params['width_a'], 'width_b' => cab.params['width_b'] }
+        when 'l_shaped' then rec.hand == 'right' ? { 'width_a' => cab.params['width_b'], 'width_b' => cab.params['width_a'] } : { 'width_a' => cab.params['width_a'], 'width_b' => cab.params['width_b'] }
         else {}
         end
       end
 
-      # A blind cabinet is turned 180 degrees, so when its width changes it grows towards -X: slide it back against wall B.
+      # A blind cabinet is turned 180 degrees about its origin. Left hand: its origin is at its far end, so when its width changes it grows
+      # past wall B towards -X and is slid back (min x = origin x). Right hand: its origin is at the corner and it grows away from it: it
+      # already stays put, but the same check keeps max x on the corner.
       def align_corner(group, rec, ox, _oy)
         return unless group && rec.kind == 'blind'
 
-        delta = Units.to_sketchup(ox - Units.from_sketchup(group.bounds.min.x))
+        edge = rec.hand == 'right' ? group.bounds.max.x : group.bounds.min.x
+        delta = Units.to_sketchup(ox - Units.from_sketchup(edge))
         group.transform!(Geom::Transformation.translation(Geom::Vector3d.new(delta, 0, 0))) if delta.abs > 1e-9
       end
     end

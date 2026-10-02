@@ -57,6 +57,14 @@ module Geom
       @xscale = @yscale = @zscale = 1.0
     end
 
+    def xaxis
+      Vector3d.new(*cols[0])
+    end
+
+    def yaxis
+      Vector3d.new(*cols[1])
+    end
+
     def linear(v)
       3.times.map { |r| @cols[0][r] * v[0] + @cols[1][r] * v[1] + @cols[2][r] * v[2] }
     end

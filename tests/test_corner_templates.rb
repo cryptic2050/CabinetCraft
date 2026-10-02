@@ -103,10 +103,10 @@ class TestCornerTemplates < Minitest::Test
     no_overlaps(panels)
     door = panels.find { |p| p.key == 'door' }
     panel = panels.find { |p| p.key == 'blind_panel' }
-    assert_in_delta 900 - 350 - 3, door.size[0], 1e-9
-    assert_in_delta 350, panel.size[0], 1e-9
+    assert_in_delta 1000 - 600 - 3, door.size[0], 1e-9 # defaults: 1000 wide, 600 blind
+    assert_in_delta 600, panel.size[0], 1e-9
     assert door.max_corner[0] <= panel.min_corner[0] + 1e-9 # blind on the right: door left of the panel
-    assert_in_delta 900, panel.max_corner[0], 1e-9
+    assert_in_delta 1000, panel.max_corner[0], 1e-9
   end
 
   def test_blind_left_is_the_mirror_image
@@ -123,9 +123,14 @@ class TestCornerTemplates < Minitest::Test
 
   def test_blind_rejects_a_door_that_would_be_too_narrow_and_warns_about_a_wide_blind
     refute build(blind, 'width' => 600, 'blind' => 400).result.ok?
-    r = build(blind, 'width' => 1000, 'blind' => 520).result
-    assert r.ok?
-    assert(r.issues.any? { |i| i.severity == :warning })
+    narrow = build(blind, 'width' => 900, 'blind' => 600).result # a 297 mm door: allowed, but flagged
+    assert narrow.ok?
+    assert_match(/narrower than 300 mm/, narrow.issues.map(&:message).join)
+    short = build(blind, 'width' => 1000, 'blind' => 400, 'depth' => 560).result # blind panel narrower than the neighbouring run is deep
+    assert short.ok?
+    assert_match(/narrower than the cabinet depth.*neighbouring run will block the door/, short.issues.map(&:message).join)
+    clean = build(blind).result
+    assert_empty clean.issues # the defaults raise no warning
   end
 
   def test_corner_cabinets_flow_through_parts_cutting_and_assembly
