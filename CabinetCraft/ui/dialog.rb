@@ -21,11 +21,39 @@ module CabinetCraft
       end
     end
 
+    # SketchUp keeps one window per model on Windows/macOS: when the user opens or creates another model the
+    # dashboard must re-attach to that model's selection and drop everything cached for the old one.
+    class ModelWatcher < ::Sketchup::AppObserver
+      def initialize(dashboard)
+        super()
+        @dashboard = dashboard
+      end
+
+      def onNewModel(_model)
+        @dashboard.model_changed
+      end
+
+      def onOpenModel(_model)
+        @dashboard.model_changed
+      end
+
+      def onActivateModel(_model)
+        @dashboard.model_changed
+      end
+    end
+
     class Dashboard
       class << self
         def show
           @instance ||= new
           @instance.show
+        end
+
+        # Menu entry: runs the in-model API self test and shows the result in a message box.
+        def show_self_test
+          r = Controller.new.self_test
+          lines = r['checks'].map { |c| "#{c['ok'] ? 'PASS' : 'FAIL'}  #{c['name']}#{c['ok'] ? '' : " - #{c['detail']}"}" }
+          ::UI.messagebox("SketchUp #{r['sketchup']}: #{r['total'] - r['failed']} of #{r['total']} checks passed\n\n#{lines.join("\n")}", ::MB_MULTILINE)
         end
       end
 
@@ -34,6 +62,16 @@ module CabinetCraft
         @dialog = nil
         @watcher = nil
         @watched_selection = nil
+        @app_watcher = nil
+      end
+
+      # A different model became active: fresh controller (its caches belong to the old model), new observer, page reload.
+      def model_changed
+        return unless @dialog&.visible?
+
+        @controller = Controller.new
+        attach_selection_observer
+        script('location.reload()')
       end
 
       def show
@@ -44,6 +82,7 @@ module CabinetCraft
         @dialog = build_dialog
         @dialog.show
         attach_selection_observer
+        attach_app_observer
       end
 
       # Called by the selection observer: tell the page which cabinet (if any) is selected.
@@ -63,7 +102,10 @@ module CabinetCraft
         )
         dlg.set_file(File.join(CabinetCraft::PLUGIN_ROOT, 'ui', 'dashboard.html'))
         dlg.add_action_callback('rpc') { |_ctx, payload| handle_rpc(payload) }
-        dlg.set_on_closed { detach_selection_observer }
+        dlg.set_on_closed do
+          detach_selection_observer
+          detach_app_observer
+        end
         dlg
       end
 
@@ -110,6 +152,17 @@ module CabinetCraft
         @watched_selection = ::Sketchup.active_model.selection
         @watcher = SelectionWatcher.new(self)
         @watched_selection.add_observer(@watcher)
+      end
+
+      def attach_app_observer
+        detach_app_observer
+        @app_watcher = ModelWatcher.new(self)
+        ::Sketchup.add_observer(@app_watcher)
+      end
+
+      def detach_app_observer
+        ::Sketchup.remove_observer(@app_watcher) if @app_watcher
+        @app_watcher = nil
       end
 
       def detach_selection_observer

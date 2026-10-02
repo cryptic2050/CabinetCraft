@@ -8,6 +8,7 @@ require_relative '../core/material'
 require_relative '../core/construction'
 require_relative '../core/cabinet'
 require_relative '../generators/cabinet_generator'
+require_relative '../utilities/self_test'
 require_relative '../core/hardware'
 require_relative '../manufacturing/parts_list'
 require_relative '../manufacturing/cutting_list'
@@ -52,7 +53,7 @@ module CabinetCraft
       include VisualizationCommands
       include RunEditCommands
 
-      PUBLIC_METHODS = %w[bootstrap preview create update select list parts_list cutting_list hardware_state
+      PUBLIC_METHODS = %w[self_test bootstrap preview create update select list parts_list cutting_list hardware_state
                           add_hardware delete_hardware set_hinge_rules set_hardware_setting
                           project_state set_project_name nest nest_lock nest_lock_current nest_unlock nest_unlock_all
                           labels lookup_part validate select_target
@@ -119,6 +120,11 @@ module CabinetCraft
           'ok' => ok, 'params' => params, 'issues' => issues, 'values' => cab.calculation.values, 'derived' => derived,
           'panels' => ok ? cab.part_rows : [], 'hardware' => ok ? cab.hardware_rows : []
         }
+      end
+
+      # Exercises the real SketchUp API calls CabinetCraft relies on; the model is left unchanged (aborted operation).
+      def self_test
+        SelfTest.run(model)
       end
 
       def create(type, raw)

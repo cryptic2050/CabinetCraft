@@ -3021,3 +3021,34 @@ class TestVisualizationScene < Minitest::Test
     assert_equal 0, empty.set_visualization('role')['parts']
   end
 end
+
+class TestSelfTest < Minitest::Test
+  def setup
+    Sketchup.reset_model!
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    CabinetCraft::Material.config = CabinetCraft::MaterialConfig.new
+    @c = CabinetCraft::Interface::Controller.new
+  end
+
+  def test_the_self_test_passes_on_the_mock_and_runs_inside_an_aborted_operation
+    r = @c.self_test
+    assert r['ok'], r['checks'].reject { |c| c['ok'] }.inspect
+    assert_operator r['total'], :>=, 10
+    ops = Sketchup.active_model.ops.map(&:first)
+    assert_equal %i[start abort], ops.last(2)
+  end
+
+  def test_a_failing_check_is_reported_not_raised
+    CabinetCraft::SelfTest.stub(:checks, ->(_m) { { 'boom' => -> { raise 'nope' }, 'fine' => -> { true }, 'bad' => -> { 'wrong size' } } }) do
+      r = CabinetCraft::SelfTest.run(Sketchup.active_model)
+      assert_equal [false, 3, 2], [r['ok'], r['total'], r['failed']]
+      assert_equal 'RuntimeError: nope', r['checks'][0]['detail']
+      assert_equal 'wrong size', r['checks'][2]['detail']
+    end
+    assert_equal :abort, Sketchup.active_model.ops.last.first
+  end
+
+  def test_self_test_is_exposed_to_the_page
+    assert_includes CabinetCraft::Interface::Controller::PUBLIC_METHODS, 'self_test'
+  end
+end

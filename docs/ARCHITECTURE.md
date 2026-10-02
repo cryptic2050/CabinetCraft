@@ -173,17 +173,19 @@ cabinetcraft/
 | + | PDF export of parts list, cutting list, labels, nesting (with cut sequences) | IMPLEMENTED |
 | + | Editable materials (custom + built-in overrides, in-model snapshot, regeneration of affected cabinets) | IMPLEMENTED |
 | + | Manual dimension overrides (AUTO / MANUAL OVERRIDE, hold-back warning on parametric changes) | IMPLEMENTED |
-| 3 | Notes column, in-table editing of parts, locks placement | PLANNED |
+| 3 | Notes column, in-table editing of parts | PLANNED (by design: edits go through parameters / overrides) |
 | 4 | Nesting: grain, kerf, trim, spacing, per-material, totals (sheets, area, used, waste, utilisation) | IMPLEMENTED (heuristic, not optimal) |
 | 4 | Sheet preview, drag to move, lock / unlock, rotate, move to another sheet, cut sequence | IMPLEMENTED (cut sequence only when the layout is guillotine-cuttable) |
 | 4 | Labels with unique QR per part; printable HTML; CSV / JSON; paste-a-code lookup | IMPLEMENTED |
-| 4 | QR opening drawings, assembly steps, production status | PLANNED |
+| 4 | Production status per part (cut / banded / drilled / assembled) | IMPLEMENTED |
+| 4 | QR opening drawings | PLANNED (a QR holds only an identifier) |
 | 4 | Pre-production validation with click-to-select | IMPLEMENTED (drilling check not possible until Phase 5) |
 | 5 | Machining data: shelf pins, hinge cups/plates, handles, runners (side-mount), cam/dowel/confirmat, custom patterns | IMPLEMENTED |
 | 5 | Drilling feasibility checks (in the pre-production validation) | IMPLEMENTED |
 | 5 | DXF R12 per nested sheet; SVG; machining CSV / JSON | IMPLEMENTED (DXF verified with ezdxf) |
 | 5 | CNC: machines + tool tables, ISO / GRBL / custom template posts, G-code per sheet, face-B underside program | IMPLEMENTED (unverified on real machines; no tabs) |
-| 5 | Lamello / mortise machining, undermount runner holes, horizontal boring output, tabs, G41/G42, simulation | PLANNED |
+| 5 | Tabs, machine travel limits, G-code simulator | IMPLEMENTED |
+| 5 | Lamello / mortise machining, undermount runner holes, horizontal boring output, G41/G42 | PLANNED (manufacturer-specific; see docs/LIMITATIONS.md) |
 | 6 | Template creator (safe expression parser, JSON templates, presets) | IMPLEMENTED |
 | 6 | Company standards (manufacturing defaults, applied to new cabinets) | IMPLEMENTED |
 | 6 | Cost estimation (`manufacturing/costing.rb`: materials by nested sheets or area, edge banding, hardware unit prices, CNC, labour, installation, transport, margin; per-cabinet allocation that sums exactly to the totals; internal costing PDF/CSV/JSON and client quote PDF with selling prices only; COSTS tab) | IMPLEMENTED |
@@ -192,7 +194,10 @@ cabinetcraft/
 | 7 | Linked runs (`core/run.rb`, `ProjectStore#runs`): stored in the model, Quick Stretch re-plans and resizes members in one undo step, pinned cabinets, in-sync / resized / moved / missing status, unlink | IMPLEMENTED |
 | 8 | Corner logic (`core/corner_layout.rb`, `ui/layout_commands.rb`, CORNERS tab): two walls at 90 degrees, a corner of kind none / blind / L-shaped, a linked run along each wall (run B is turned 90 degrees), plan-view drawing, create and re-plan both runs in one undo step, layouts remembered in the model | IMPLEMENTED |
 | 8 | Corner cabinet templates (L-shaped corner base, blind corner base) installable from the template library | IMPLEMENTED |
-| 8 | Outside corners, walls that are not at 90 degrees, door swing / handle clearance checks, mirrored (right-hand) layouts, changing the corner kind of an existing layout, wall cabinets and tall units in a corner, filler-strip cabinets, adding or removing cabinets in an existing run | PLANNED |
+| 8 | Right-hand layouts, changing the corner kind, filler strips, add / remove / repair run members, conservative door-swing and blind-panel warnings | IMPLEMENTED |
+| 8 | Outside corners, walls that are not at 90 degrees, door-swing simulation | PLANNED |
 | 9 | Project dashboard (`manufacturing/dashboard.rb`, `ui/overview_commands.rb`, DASHBOARD tab): KPI tiles, sheet utilisation bars, cost breakdown, readiness checklist (model check, nesting, machining, prices, runs), problem list, hardware totals. Derived on demand, nothing stored; the nesting is computed once per dashboard | IMPLEMENTED |
-| - | All other library cabinets (wall, tall, wardrobe, vanity, TV, corner...) | PLANNED - listed, not selectable |
+| 10 | Bundled templates: wall, tall, wardrobe, vanity, TV base, filler strip, corner bases | IMPLEMENTED |
+| 10 | VIEW modes (`manufacturing/visualization.rb`, `scene/visualization.rb`): colour by material, role, grain, edges, overrides, production, cabinet; presentation alpha; mode stored in the model | IMPLEMENTED |
+| 10 | In-SketchUp self test (`utilities/self_test.rb`), model-change observer rebind, PNG icon fallback, SketchUp 2017 guard | IMPLEMENTED (self test must be run in SketchUp to mean anything) |
 | - | PLACEHOLDER | none: no control exists that does nothing |

@@ -87,6 +87,22 @@ module Sketchup
     def initialize(*); end
   end
 
+  class AppObserver
+    def initialize(*); end
+  end
+
+  def self.add_observer(o)
+    (@app_observers ||= []) << o
+  end
+
+  def self.remove_observer(o)
+    (@app_observers ||= []).delete(o)
+  end
+
+  def self.app_observers
+    @app_observers ||= []
+  end
+
   class Color
     attr_reader :rgb
 
@@ -125,6 +141,11 @@ module Sketchup
       @min = Geom::Point3d.new(*pts.map(&:x).min.then { |x| [x, pts.map(&:y).min, pts.map(&:z).min] })
       @max = Geom::Point3d.new(*pts.map(&:x).max.then { |x| [x, pts.map(&:y).max, pts.map(&:z).max] })
     end
+
+    # As in SketchUp: extents along X, Y, Z.
+    def width = max.x - min.x
+    def height = max.y - min.y
+    def depth = max.z - min.z
   end
 
   class Face

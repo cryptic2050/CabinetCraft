@@ -1211,10 +1211,12 @@
     return `<h2>SETTINGS</h2><div class="card"><div class="field"><label for="unit">Display units</label>
       <select id="unit">${Object.keys(UNIT_MM).map((u) => `<option ${u === S.unit ? 'selected' : ''}>${u}</option>`).join('')}</select>
       <div class="note">Model data is always stored in millimetres; this changes only what you see and type.</div></div></div>
+      <div class="card"><h3>Self test</h3><p class="mute">Runs the SketchUp API calls this extension depends on against your real model (nothing is kept) and lists any that behave differently than expected. Also under Extensions > CabinetCraft Pro.</p><button id="selftest">Run self test</button><div id="selftest_out"></div></div>
       <h2>MANUFACTURING STANDARDS</h2><div id="stdbox"><p class="mute">Loading...</p></div>`;
   }
   function bindSettings() {
     $('#unit').onchange = (e) => { S.unit = e.target.value; save('cc_unit', S.unit); render(); };
+    $('#selftest').onclick = () => rpc('self_test').then((r) => { $('#selftest_out').innerHTML = `<p><b>${r.total - r.failed} of ${r.total} checks passed</b> (SketchUp ${esc(r.sketchup)})</p><table class="legend"><tbody>${r.checks.map((c) => `<tr><td>${c.ok ? 'PASS' : '<b>FAIL</b>'}</td><td>${esc(c.name)}${c.ok ? '' : `<br><span class="mute">${esc(c.detail)}</span>`}</td></tr>`).join('')}</tbody></table>`; }).catch(showError);
     rpc('standards_state').then((st) => { S.std = st; paintStandards(); }).catch(showError);
   }
   function paintStandards() {

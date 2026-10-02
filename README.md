@@ -1,6 +1,11 @@
-# CabinetCraft Pro (Phases 1-5 + materials, overrides, PDF)
+# CabinetCraft Pro
 
 Parametric cabinet design to manufacturing data inside SketchUp. Original code; not derived from any other plugin.
+
+**Latest additions:** linked cabinet runs with filler strips, corner layouts (blind / L-shaped, left or right hand, changeable), wall / tall /
+wardrobe / vanity / TV / filler templates, a project DASHBOARD, cost estimation, assembly drawings, production tracking per part, CNC tabs
+and machine travel limits, offcut tracking, a wider nesting search, model-colouring VIEW modes (by part kind, grain, edges, overrides,
+production status, presentation), nested/component cabinet discovery, and an in-SketchUp self test.
 
 **Also added:** *editable materials* (custom materials and edits of built-in ones: thickness, sheet size, price, supplier, grain, colour,
 texture, waste, edge-band options; stored in the model too), *manual dimension overrides* per part (AUTO / MANUAL OVERRIDE; you are asked
@@ -71,47 +76,10 @@ the generator, registry, controller, undo operations and duplicate-ID repair.
 
 ## Known limitations
 
-* **Not yet run inside real SketchUp.** The SketchUp-facing code is tested only against a mock; expect to fix small API issues on first run.
-* Toolbar icon is SVG (SketchUp 2016+); older builds need PNG.
-* Only top-level groups are scanned for cabinets; making a cabinet a Component or nesting it in another group is unsupported.
-* Back-panel Z/Y positions and the rule constants in `core/construction.rb` are my assumptions (the brief gave results, not rules); confirm them against your factory standard.
-* Selection sync is bound to the model open when the dialog opened (re-open the dialog after switching models on macOS).
-* Doors are plain slab doors only; no profiles (shaker, raised panel, glass), no hinges or handles, no opening direction.
-* Drawer boxes are simple 5-panel boxes (bottom under the walls); no runner hardware data or grooves yet. Box depth snaps down to a multiple of 50 mm.
-* Toe kick is a single plinth board; no legs or brackets.
-* Dividers span only the door/open zone; shelves are evenly spaced and the same count in every compartment.
-* Rule constants for drawers (clearance 13 mm, box lift 10 mm, height deduction 40 mm, 50 mm depth steps) are my assumptions - check them against your runners.
-* Nesting is a **heuristic, not optimal** (guillotine best-area-fit, best of 4 orderings). Sheet grain is assumed to run along the sheet
-  length; one sheet size per material (optional global override); leftover offcuts are not tracked; parts are only ever nested whole.
-* A manually arranged layout may not be cuttable with edge-to-edge cuts; the cut sequence is then withheld and the UI says why.
-* The cutting-list sheet count (REPORTS) remains an area estimate; NESTING shows the real placed-sheet count.
-* **G-code is generated, not verified on any machine.** Simulate and dry-run before cutting. No tabs / onion skin or hold-down logic,
-  no cutter compensation (the offset path is explicit), no tool-path simulation. Only vertical holes are machined; horizontal edge
-  bores (cam / dowel / confirmat edge holes) are listed but excluded. Face-B holes need a second program (underside), assuming the sheet
-  is turned over about its short edge (X mirrored).
-* Machining defaults (32 mm system: 37 mm setback, 5 mm pin holes, 35 mm cups at 22.5 mm, 15 mm cams at 34 mm, 128 mm handle spacing...)
-  are common values, **not** your hardware's data sheet: confirm and edit them in CNC > Drilling system.
-* Lamello / mortise-and-tenon connectors and undermount runners have no machining pattern yet (a warning says so).
-* QR codes hold a part identifier only (`CC1|<cabinet id>|<part key>`); they need an external scanner and the "Identify a part" box
-  to resolve them. Drawings / assembly steps / production status behind a scan are not implemented.
-* Validation checks drilling feasibility but not machine travel limits, clamps or tool-path simulation. Part-geometry edits are detected to 0.2 mm. Selecting a
-  part from an issue opens its cabinet group for editing.
-* Edge banding: finished sizes only (band thickness not deducted); fixed rules per part role, no per-edge manual editing yet.
-* Hardware: quantities and text positions only - no drilling coordinates, prices not used yet, locks are in the library but never placed automatically.
-* Handle position rules (50 mm from the free edge, 100 mm below the top), hinge inset (100 mm), connector spacing (200 mm) are my defaults - editable in HARDWARE.
-* Custom hardware is stored per user (SketchUp defaults), not inside the .skp; opening a model on another machine shows "Unknown hardware" warnings for custom items.
-* Editing parts directly in the PARTS table and the Notes column are not implemented (use ADVANCED PARTS for overrides).
-* Overrides: sizes are set along the part's own length / width / thickness axes as generated. Hardware counts, machining and reports
-  follow the overridden parts, but the rules that position *other* parts (e.g. where a shelf sits) still use the automatic sizes: an
-  override can make parts overlap or break drilling, and the pre-production check will say so.
-* Materials: the back material is chosen by thickness unless you pick one explicitly. Texture images are applied best-effort (a missing
-  file is ignored). Custom materials travel with the model (restored on another machine if missing there).
-* PDF: dimensions are always millimetres; the writer supports Windows-1252 text only (other characters print as "?"); labels are laid
-  out for 63.5 x 38.1 mm sheets (use the HTML export for other sizes).
-* Phase 6 so far: custom templates, company standards and cost estimation are implemented. Assembly documentation is implemented too (ASSEMBLY tab: rule-based steps, assembled and exploded drawings, EXPLODE / ASSEMBLE buttons that move the parts in the SketchUp model reversibly, assembly PDF).
-* Cost figures are estimates from your own prices; anything unpriced is reported as a warning and counted as 0. Material cost follows the nested sheet count, and the nesting is a heuristic, not proven optimal.
-* Cost settings are stored in the model. Hardware unit prices are stored per machine (HARDWARE tab), so another machine opening the .skp needs the same prices entered.
+The full, honest register (FIXED / MITIGATED / OPEN / CANNOT FIX, with reasons) is in **`docs/LIMITATIONS.md`**. The ones that matter most:
 
-* Assembly steps come from part roles in a standard carcass-first order; they are not a manufacturer-verified procedure. Custom-template parts with unknown roles go into a generic step. The exploded view uses fixed directions per role (generic 'away from centre' for unknown roles, which can overlap), and the drawings use approximate painter's-order depth sorting. While a cabinet is exploded, the model check warns and skips its overlap test.
-* Runs (RUNS tab) size and place ordinary cabinets and are remembered in the model, so the wall length can be changed later (re-plan resizes and re-places every member, one undo step). The row is placed along the model X axis from the first cabinet, so rotated cabinets are not supported. Deleted members cannot be restored (unlink and recreate); you cannot add or remove cabinets in an existing run. A leftover gap is reported, not filled; there is no filler-strip cabinet yet. Widths are rounded to 1 mm.
-* Corner layouts (CORNERS tab) handle an inside corner of two walls at 90 degrees: wall A along the model X axis and wall B along Y, the room corner at the layout origin (default: to the right of existing cabinets). Cabinets stand in front of the walls. The corner is either empty (run A starts in it, run B starts after run A's depth plus a clearance), a blind corner cabinet, or an L-shaped corner cabinet; the two corner cabinets are templates you install from the CORNERS tab. The clearance only keeps run B off the 18 mm front of run A's end cabinet: door swing, handles and appliances are not checked. Layouts are laid out left-handed only (swap the walls to mirror), outside corners and non-90-degree walls are not supported, and the corner kind of an existing layout cannot be changed (create it again). The L-shaped template is built from two rectangular bottoms and backs and has no toe kick. The corner cabinet keeps its size when a wall length changes; edit it normally and re-plan.
+* **Not yet run inside real SketchUp.** Everything is tested against a mock. Run **Extensions > CabinetCraft Pro > Run self test** first; it checks the real API calls the extension relies on (and leaves your model unchanged).
+* **G-code is generated, not verified on a machine.** Dry-run before cutting.
+* **Nesting is a heuristic**, never claimed optimal. Assembly steps and explode directions are rule-based, not a manufacturer procedure.
+* Machining, hinge, drawer and construction constants are common defaults, not your hardware's data sheet; they are editable.
+* Not built: shaker / raised / glass doors, Lamello and undermount-runner machining, horizontal edge boring output, outside corners and non-90-degree walls, door-swing simulation.
