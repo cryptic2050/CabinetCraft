@@ -108,6 +108,26 @@ equally. When drawers fill the cabinet, shelves/dividers are ignored *with a war
   parsed with ezdxf (dev only) and compared hole for hole.
 * **Not generated**: tabs / onion skin, cutter compensation, horizontal boring, helical holes, simulation.
 
+## Editable materials, manual overrides, PDF (added after Phase 5)
+
+* **Materials** (`core/material.rb`, `core/material_config.rb`): built-in materials keep their name and thickness; price, supplier,
+  sheet size, grain (along sheet length / width / none), colour, texture, waste allowance and edge-band options are editable.
+  Custom materials are fully editable. Stored per user (SketchUp defaults) **and** mirrored inside the model
+  (`CabinetCraft_Project` attributes) so a model opens correctly on another machine (local settings win over the snapshot; malformed
+  snapshot entries are skipped). Saving a material regenerates only the cabinets that use it; deleting one in use is refused.
+  A material missing from the library is reported (`missing_material`) instead of crashing; the cabinet stays readable.
+  Back panels can name a back material (`back_material`) or stay on "auto" (by thickness). Nesting honours grain along the width.
+* **Manual overrides** (`core/overrides.rb`): per part, `length` / `width` / `thickness` (along the part's own axes), `offset_x/y/z`
+  (relative to the automatic position), `material`, `edges` (replaces the automatic banding). Stored with the cabinet
+  (`overrides_json`). `Cabinet#auto_panels` are the generated panels; `Cabinet#panels` applies the overrides and everything
+  downstream (geometry, parts, labels, nesting, machining, hardware counts, DXF/G-code, PDFs) uses `panels`. Parts are marked
+  AUTO / MANUAL OVERRIDE. **Never silently overwritten**: `Controller#update` holds back a parameter change that would alter an
+  overridden size and returns the affected list; the caller then chooses `keep`, `reset` (return those fields to AUTO) or cancels.
+* **PDF** (`exporters/pdf_writer.rb`, `pdf_reports.rb`): original dependency-free PDF 1.4 writer (standard fonts with real width
+  metrics, vector graphics incl. QR codes, automatic pagination, "Page x of y"). Documents: parts list, cutting list, labels
+  (63.5 x 38.1 mm, 21 per A4), and nesting (sheet drawings, part tables, cut sequences). Verified by reading the files back with
+  pypdf, rendering them with PyMuPDF and decoding the QR codes from the rendered page with OpenCV (dev tools only).
+
 ## Folder layout
 
 ```
@@ -115,11 +135,11 @@ cabinetcraft/
   cabinetcraft_pro.rb            loader (registers the extension)
   CabinetCraft/
     main.rb                      toolbar + menu
-    core/        units parameter material construction rules panel cabinet library edge_banding hardware hardware_rules machining_config
+    core/        units parameter material material_config construction rules overrides panel cabinet library edge_banding hardware hardware_rules machining_config
     generators/  panel_generator (pure)  cabinet_generator (SketchUp geometry)
     scene/       attributes registry settings_store project_store model_checker
     manufacturing/ parts_list cutting_list nesting cut_sequence labels machining cnc cnc_posts
-    exporters/   csv_exporter json_exporter label_html dxf_exporter svg_exporter
+    exporters/   csv_exporter json_exporter label_html dxf_exporter svg_exporter pdf_writer pdf_reports
     utilities/   qr_code
     validation/  validator collision_checker machining_checker
     ui/          controller dialog dashboard.html/.css/.js
@@ -145,20 +165,20 @@ cabinetcraft/
 | 2 | Library presets (single/double door, 3/4 drawer, drawer-over-door, open shelf) | IMPLEMENTED (presets of one generator) |
 | 2 | Shaker / raised-panel / glass / aluminium doors, door-profile library | PLANNED - slab only |
 | 2 | Drawer slide types, hinge/handle placement | PLANNED (Phase 3 hardware) |
-| 1 | Material editing, prices, custom materials | PLANNED - library is read-only (not part of this Phase 2 slice) |
-| 1 | Manual dimension overrides ("AUTO" / "MANUAL OVERRIDE") | PLANNED (not yet built). Part keys are stable so overrides can be keyed to them |
 | 3 | Edge banding (rule-based, per edge, L1/L2/W1/W2 codes, banding metres) | IMPLEMENTED |
 | 3 | Hardware library (hinges, runners, connectors, handles, shelf pins, legs, locks) + custom items | IMPLEMENTED |
 | 3 | Rule-based placement: hinges by door height (editable table), handles, runners, connectors, shelf pins, feet | IMPLEMENTED (quantities + positions as text; no drilling coordinates yet) |
 | 3 | Parts list: project-wide, sort / filter / search; export CSV, Excel CSV, JSON | IMPLEMENTED |
 | 3 | Cutting list: grouped identical parts, area, sheet estimate, band + hardware totals; export | IMPLEMENTED (sheet count = estimate, not nesting) |
-| 3 | PDF export, in-table editing of parts, per-edge manual banding, locks placement | PLANNED |
+| + | PDF export of parts list, cutting list, labels, nesting (with cut sequences) | IMPLEMENTED |
+| + | Editable materials (custom + built-in overrides, in-model snapshot, regeneration of affected cabinets) | IMPLEMENTED |
+| + | Manual dimension overrides (AUTO / MANUAL OVERRIDE, hold-back warning on parametric changes) | IMPLEMENTED |
+| 3 | Notes column, in-table editing of parts, locks placement | PLANNED |
 | 4 | Nesting: grain, kerf, trim, spacing, per-material, totals (sheets, area, used, waste, utilisation) | IMPLEMENTED (heuristic, not optimal) |
 | 4 | Sheet preview, drag to move, lock / unlock, rotate, move to another sheet, cut sequence | IMPLEMENTED (cut sequence only when the layout is guillotine-cuttable) |
 | 4 | Labels with unique QR per part; printable HTML; CSV / JSON; paste-a-code lookup | IMPLEMENTED |
 | 4 | QR opening drawings, assembly steps, production status | PLANNED |
 | 4 | Pre-production validation with click-to-select | IMPLEMENTED (drilling check not possible until Phase 5) |
-| 4 | Direct PDF output (labels, nesting, cutting list) | PLANNED |
 | 5 | Machining data: shelf pins, hinge cups/plates, handles, runners (side-mount), cam/dowel/confirmat, custom patterns | IMPLEMENTED |
 | 5 | Drilling feasibility checks (in the pre-production validation) | IMPLEMENTED |
 | 5 | DXF R12 per nested sheet; SVG; machining CSV / JSON | IMPLEMENTED (DXF verified with ezdxf) |

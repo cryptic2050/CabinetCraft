@@ -307,7 +307,7 @@
   }
 
   function exportButtons(kind, formats) {
-    const f = formats || [['csv', 'CSV'], ['excel_csv', 'Excel CSV'], ['json', 'JSON']];
+    const f = formats || [['pdf', 'PDF'], ['csv', 'CSV'], ['excel_csv', 'Excel CSV'], ['json', 'JSON']];
     return `<div class="row" style="margin:8px 0"><span class="mute">Export:</span>${f.map(([fmt_, l]) => `<button class="ghost" data-export="${kind}" data-format="${fmt_}">${l}</button>`).join('')}</div>`;
   }
   function bindExports() {
@@ -328,11 +328,11 @@
     const bands = c.edge_banding.length ? `<div class="card"><table>${c.edge_banding.map((b) => `<tr><td>${b.thickness} mm band</td><td class="num">${b.length_m} m</td></tr>`).join('')}</table></div>` : '<p class="mute">No edge banding.</p>';
     const hw = c.hardware.length ? `<div class="card"><table>${c.hardware.map((h) => `<tr><td>${esc(h.name)}</td><td class="mute">${esc(h.category)}</td><td class="num">${h.qty}</td></tr>`).join('')}</table></div>` : '';
     v.innerHTML = `<h2>CUTTING LIST - ${c.cabinet_count} cabinet${c.cabinet_count === 1 ? '' : 's'}, ${c.part_count} parts</h2>${mats}<h2>EDGE BANDING</h2>${bands}<h2>HARDWARE</h2>${hw}
-      <p class="mute">${esc(c.estimate_note)} Dimensions in ${S.unit}.</p>
+      <p class="mute">${esc(c.estimate_note)} Dimensions in ${S.unit}. PDFs always use millimetres.</p>
       <h2>EXPORT</h2>${exportButtons('cutting_list')}<div class="row"><span class="mute">Hardware list:</span>
       <button class="ghost" data-export="hardware" data-format="csv">CSV</button><button class="ghost" data-export="hardware" data-format="excel_csv">Excel CSV</button></div>
       <div class="row" style="margin-top:8px"><span class="mute">Whole project:</span><button class="ghost" data-export="project" data-format="json">JSON backup</button></div>
-      <p class="mute">PDF export: planned.</p>`;
+      `;
     bindExports();
   }
 
@@ -454,8 +454,8 @@
     const cards = shown.map((l) => `<div class="lbl"><div class="lt"><div class="mute" style="font-size:9px">${esc(l.project)}</div><b>${esc(l.cabinet)} &middot; ${esc(l.part)}</b>
       <div class="mono">${esc(l.part_id)}</div><div><b>${esc(l.dimensions)}</b> mm &times;${l.qty}</div><div>${esc(l.material)}</div><div class="mute">${esc(l.grain)} &middot; ${esc(l.edge_banding)}</div></div><div class="lq">${l.qr_svg}</div></div>`).join('');
     v.innerHTML = `<h2>LABELS - ${esc(S.labels.project)}</h2>
-      ${L.length ? `<div class="row" style="margin-bottom:8px">${exportButtons('labels', [['html', 'Printable sheet (HTML)'], ['csv', 'CSV'], ['excel_csv', 'Excel CSV'], ['json', 'JSON']])}</div>
-      <p class="mute">${L.length} labels, one per part, each with a unique QR code. Open the HTML file in a browser to print or save as PDF (a direct PDF export is planned).</p>` : '<div class="card"><h3>No parts</h3><p>Create a cabinet first.</p></div>'}
+      ${L.length ? `<div class="row" style="margin-bottom:8px">${exportButtons('labels', [['pdf', 'PDF (21 per A4 sheet)'], ['html', 'HTML'], ['csv', 'CSV'], ['excel_csv', 'Excel CSV'], ['json', 'JSON']])}</div>
+      <p class="mute">${L.length} labels, one per part, each with a unique QR code. The PDF is laid out for 63.5 x 38.1 mm labels, 21 per A4 sheet; the HTML version is for other sizes.</p>` : '<div class="card"><h3>No parts</h3><p>Create a cabinet first.</p></div>'}
       <h2>IDENTIFY A PART</h2><div class="card"><div class="row"><input id="lk_code" placeholder="Paste or scan a QR code..." style="flex:1;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:7px"><button class="primary" id="lk_go">Find</button></div><div id="lk_out"></div>
       <p class="mute">A barcode scanner or phone scanner returns text like CC1|&hellip;|side_left. Pasting it here finds the part in the model.</p></div>
       ${L.length ? `<h2>PREVIEW</h2><div class="lblgrid">${cards}</div>${L.length > shown.length ? `<p class="mute">Showing ${shown.length} of ${L.length}; exports contain all.</p>` : ''}` : ''}

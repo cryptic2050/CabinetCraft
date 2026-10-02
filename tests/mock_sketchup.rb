@@ -31,6 +31,10 @@ module Geom
 end
 
 module Sketchup
+  class SelectionObserver
+    def initialize(*); end
+  end
+
   class Color
     attr_reader :rgb
 

@@ -13,7 +13,8 @@ $stdin.each_line do |line|
   out = begin
     if req['method'] == 'export' # the real dialog asks via UI.savepanel; here we write to a temp dir
       kind, fmt = req['args']
-      { 'ok' => true, 'result' => c.export(kind, fmt, File.join(Dir.tmpdir, "cc_#{kind}.#{fmt == 'json' ? 'json' : 'csv'}")) }
+      ext = CabinetCraft::Interface::Controller::EXTENSIONS.fetch(fmt, 'csv')
+      { 'ok' => true, 'result' => c.export(kind, fmt, File.join(Dir.tmpdir, "cc_#{kind}.#{ext}")) }
     else
       { 'ok' => true, 'result' => c.public_send(req['method'], *req['args']) }
     end

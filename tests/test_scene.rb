@@ -2,6 +2,7 @@
 
 require_relative 'test_helper'
 require 'tmpdir'
+require 'open3'
 require_relative 'mock_sketchup'
 %w[generators/cabinet_generator scene/attributes scene/registry scene/settings_store ui/controller].each do |f|
   require File.join(CabinetCraft::PLUGIN_ROOT, f)
@@ -763,11 +764,87 @@ class TestSceneOverrides < Minitest::Test
     assert_empty @c.list['cabinets'].find { |c| c['id'] == other['id'] }['overrides']
   end
 
+  def test_an_override_that_makes_drilling_impossible_blocks_gcode
+    @c.nest('kerf' => 8)
+    @model_before = @c.cnc_check['exportable']
+    assert @model_before, 'baseline is exportable'
+    # shorten the left side so the rail joint (near the top) now lies beyond the end of the part
+    @c.set_override(@cab['id'], 'side_left', 'length' => 650)
+    v = @c.validate
+    drill = v['issues'].select { |i| i['code'] == 'impossible_drilling' && i['severity'] == 'error' }
+    refute_empty drill
+    assert(drill.all? { |i| i['part_key'] == 'side_left' && i['cabinet_id'] == @cab['id'] })
+    refute @c.cnc_check['exportable']
+    Dir.mktmpdir do |dir|
+      err = assert_raises(ArgumentError) { @c.export('gcode', 'nc', File.join(dir, 'x.nc')) }
+      assert_match(/falls outside/, err.message)
+      assert_empty Dir.children(dir)
+    end
+    @c.reset_overrides(@cab['id'], 'side_left') # back to AUTO: exportable again
+    assert @c.cnc_check['exportable']
+  end
+
   def test_advanced_parts_shape
     st = @c.advanced_parts(@cab['id'])
     side = st['parts'].find { |p| p['key'] == 'side_left' }
     assert_equal %w[bottom front top back].sort, side['edge_faces'].sort # a side's edges are not on its left/right faces
     assert_equal %w[length width thickness material edges offset_x offset_y offset_z].sort, side['fields'].keys.sort
     refute @c.advanced_parts('nope')['ok']
+  end
+end
+
+class TestScenePdf < Minitest::Test
+  def setup
+    Sketchup.reset_model!
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    CabinetCraft::Material.config = CabinetCraft::MaterialConfig.new
+    @c = CabinetCraft::Interface::Controller.new
+    @c.create('base_double_door', 'handle_type' => 'handle_bar')
+    @c.create('base_drawer_3', {})
+    @c.set_project_name('VALENTINA KITCHEN')
+  end
+
+  def test_pdf_exports_write_valid_files_for_every_report
+    Dir.mktmpdir do |dir|
+      %w[parts cutting_list labels nesting].each do |kind|
+        path = File.join(dir, "#{kind}.pdf")
+        res = @c.export(kind, 'pdf', path)
+        assert res['ok'], kind
+        bytes = File.binread(path)
+        assert bytes.start_with?('%PDF-1.4'.b), kind
+        assert bytes.end_with?("%%EOF\n".b), kind
+        assert_equal res['bytes'], bytes.bytesize
+        assert_includes bytes, 'VALENTINA'.b if kind == 'labels'
+      end
+    end
+  end
+
+  def test_pdf_needs_cabinets_and_known_kinds
+    Sketchup.reset_model!
+    empty = CabinetCraft::Interface::Controller.new
+    Dir.mktmpdir do |dir|
+      assert_raises(ArgumentError) { empty.export('parts', 'pdf', File.join(dir, 'x.pdf')) }
+      assert_raises(ArgumentError) { @c.export('hardware', 'pdf', File.join(dir, 'x.pdf')) }
+      assert_raises(ArgumentError) { @c.export('project', 'pdf', File.join(dir, 'x.pdf')) }
+      assert_empty Dir.children(dir)
+    end
+  end
+
+  def test_pdf_reflects_overrides
+    cab = @c.list['cabinets'].first
+    @c.set_override(cab['id'], 'side_left', 'length' => 650)
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, 'p.pdf')
+      @c.export('parts', 'pdf', path)
+      assert_includes File.binread(path), 'MANUAL OVERRIDE'.b
+    end
+  end
+end
+
+class TestLoader < Minitest::Test
+  def test_extension_loads_in_main_rb_order_and_runs_a_full_workflow
+    out, st = Open3.capture2e('ruby', File.join(__dir__, 'tools', 'load_main.rb'))
+    assert st.success?, out
+    assert_match(/LOAD OK: \d+ files/, out)
   end
 end

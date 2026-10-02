@@ -18,6 +18,7 @@ require_relative '../manufacturing/labels'
 require_relative '../manufacturing/machining'
 require_relative '../manufacturing/cnc'
 require_relative '../exporters/dxf_exporter'
+require_relative '../exporters/pdf_reports'
 require_relative '../exporters/svg_exporter'
 require_relative '../validation/machining_checker'
 require_relative '../exporters/label_html'
@@ -41,11 +42,11 @@ module CabinetCraft
                           delete_machine save_post delete_post cnc_check cnc_preview].freeze
 
       # kind => [formats]. 'project' is JSON only.
-      EXPORTS = { 'parts' => %w[csv excel_csv json], 'cutting_list' => %w[csv excel_csv json],
+      EXPORTS = { 'parts' => %w[csv excel_csv json pdf], 'cutting_list' => %w[csv excel_csv json pdf],
                   'hardware' => %w[csv excel_csv json], 'project' => %w[json],
-                  'nesting' => %w[csv excel_csv json], 'labels' => %w[html csv excel_csv json],
+                  'nesting' => %w[csv excel_csv json pdf], 'labels' => %w[pdf html csv excel_csv json],
                   'machining' => %w[csv excel_csv json], 'dxf' => %w[dxf], 'svg' => %w[svg], 'gcode' => %w[nc], 'gcode_b' => %w[nc] }.freeze
-      EXTENSIONS = { 'csv' => 'csv', 'excel_csv' => 'csv', 'json' => 'json', 'html' => 'html', 'dxf' => 'dxf', 'svg' => 'svg', 'nc' => 'nc' }.freeze
+      EXTENSIONS = { 'csv' => 'csv', 'excel_csv' => 'csv', 'json' => 'json', 'html' => 'html', 'pdf' => 'pdf', 'dxf' => 'dxf', 'svg' => 'svg', 'nc' => 'nc' }.freeze
       MULTI_FILE = %w[dxf svg gcode gcode_b].freeze # one file per nested sheet
 
       def model
@@ -284,9 +285,24 @@ module CabinetCraft
         raise ArgumentError, "Folder does not exist: #{File.dirname(path)}" unless Dir.exist?(File.dirname(path))
         return export_sheets(kind, path) if MULTI_FILE.include?(kind)
 
-        content = render_export(kind, format)
-        File.binwrite(path, content.encode('UTF-8'))
+        content = format == 'pdf' ? render_pdf(kind) : render_export(kind, format)
+        File.binwrite(path, format == 'pdf' ? content : content.encode('UTF-8'))
         { 'ok' => true, 'path' => path, 'bytes' => content.bytesize }
+      end
+
+      # PDF documents are built from the same derived data as the on-screen reports.
+      def render_pdf(kind)
+        cabs = project_cabinets
+        raise ArgumentError, 'There are no cabinets to export' if cabs.empty?
+
+        project = project_store.name
+        case kind
+        when 'parts' then Exporters::PdfReports.parts_list(Manufacturing::PartsList.build(cabs), project: project)
+        when 'cutting_list' then Exporters::PdfReports.cutting_list(Manufacturing::CuttingList.build(cabs), project: project)
+        when 'labels' then Exporters::PdfReports.labels(Manufacturing::Labels.build(cabs, project_name: project, qr: false), project: project)
+        when 'nesting' then Exporters::PdfReports.nesting(nest, project: project)
+        else raise ArgumentError, "#{kind} cannot be exported as pdf"
+        end
       end
 
       def render_export(kind, format)

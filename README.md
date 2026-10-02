@@ -1,6 +1,11 @@
-# CabinetCraft Pro (Phases 1-5)
+# CabinetCraft Pro (Phases 1-5 + materials, overrides, PDF)
 
 Parametric cabinet design to manufacturing data inside SketchUp. Original code; not derived from any other plugin.
+
+**Also added:** *editable materials* (custom materials and edits of built-in ones: thickness, sheet size, price, supplier, grain, colour,
+texture, waste, edge-band options; stored in the model too), *manual dimension overrides* per part (AUTO / MANUAL OVERRIDE; you are asked
+before a parameter change would alter an overridden size), and *PDF export* of the parts list, cutting list, labels (21 per A4) and
+nesting sheets with cut sequences.
 
 **Phase 5 adds** machining data (shelf pins, hinge cups and plates, handle holes, side-mount runner holes, cam / dowel / confirmat joints,
 custom drilling patterns), drilling feasibility checks, DXF / SVG output per nested sheet, and a CNC post-processor framework:
@@ -41,7 +46,9 @@ Open it from the **CabinetCraft Pro** toolbar button or *Extensions > CabinetCra
 2. PARAMETERS: set width/height/depth etc. (defaults 600 x 757 x 562), press **CREATE**.
 3. Edit any value afterwards: only that cabinet is regenerated (one Undo step per change). Select a cabinet in the model to edit it.
 4. PARTS lists every part of every cabinet; REPORTS shows the cutting list; HARDWARE manages the library and hinge rules.
-   Export buttons ask where to save the file.
+   Export buttons ask where to save the file (PDF, CSV, Excel CSV, JSON).
+   MATERIALS: edit sheet sizes/prices or add your own board; the cabinets using it update. In PARAMETERS (an existing cabinet),
+   **ADVANCED PARTS** lets you override a part's length, width, thickness, position, material or edge banding.
 5. NESTING: set kerf/trim and press NEST MATERIAL. Drag a part to move and lock it (orange outline); click a part to rotate, unlock
    or send it to another sheet. LABELS: preview, print the HTML sheet, or paste a scanned code to find a part. PROJECT: set the
    project name and read the pre-production check; click an issue to select it.
@@ -86,12 +93,19 @@ the generator, registry, controller, undo operations and duplicate-ID repair.
   are common values, **not** your hardware's data sheet: confirm and edit them in CNC > Drilling system.
 * Lamello / mortise-and-tenon connectors and undermount runners have no machining pattern yet (a warning says so).
 * QR codes hold a part identifier only (`CC1|<cabinet id>|<part key>`); they need an external scanner and the "Identify a part" box
-  to resolve them. Drawings / assembly steps / production status behind a scan, and direct PDF output, are not implemented.
+  to resolve them. Drawings / assembly steps / production status behind a scan are not implemented.
 * Validation checks drilling feasibility but not machine travel limits, clamps or tool-path simulation. Part-geometry edits are detected to 0.2 mm. Selecting a
   part from an issue opens its cabinet group for editing.
 * Edge banding: finished sizes only (band thickness not deducted); fixed rules per part role, no per-edge manual editing yet.
 * Hardware: quantities and text positions only - no drilling coordinates, prices not used yet, locks are in the library but never placed automatically.
 * Handle position rules (50 mm from the free edge, 100 mm below the top), hinge inset (100 mm), connector spacing (200 mm) are my defaults - editable in HARDWARE.
 * Custom hardware is stored per user (SketchUp defaults), not inside the .skp; opening a model on another machine shows "Unknown hardware" warnings for custom items.
-* PDF export (use the printable HTML labels), editing parts in the table, and the Notes column are not implemented.
-* Manual dimension overrides, editable materials and everything in Phase 6 are not implemented.
+* Editing parts directly in the PARTS table and the Notes column are not implemented (use ADVANCED PARTS for overrides).
+* Overrides: sizes are set along the part's own length / width / thickness axes as generated. Hardware counts, machining and reports
+  follow the overridden parts, but the rules that position *other* parts (e.g. where a shelf sits) still use the automatic sizes: an
+  override can make parts overlap or break drilling, and the pre-production check will say so.
+* Materials: the back material is chosen by thickness unless you pick one explicitly. Texture images are applied best-effort (a missing
+  file is ignored). Custom materials travel with the model (restored on another machine if missing there).
+* PDF: dimensions are always millimetres; the writer supports Windows-1252 text only (other characters print as "?"); labels are laid
+  out for 63.5 x 38.1 mm sheets (use the HTML export for other sizes).
+* Everything in Phase 6 (templates, company standards, costs, assembly documentation) is not implemented.
