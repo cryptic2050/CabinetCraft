@@ -1,0 +1,110 @@
+# frozen_string_literal: true
+
+require 'json'
+require_relative 'controller'
+
+module CabinetCraft
+  # NOTE: named Interface (not UI) so it never shadows SketchUp's ::UI module.
+  module Interface
+    class SelectionWatcher < ::Sketchup::SelectionObserver
+      def initialize(dashboard)
+        super()
+        @dashboard = dashboard
+      end
+
+      def onSelectionBulkChange(_selection)
+        @dashboard.push_selection
+      end
+
+      def onSelectionCleared(_selection)
+        @dashboard.push_selection
+      end
+    end
+
+    class Dashboard
+      class << self
+        def show
+          @instance ||= new
+          @instance.show
+        end
+      end
+
+      def initialize
+        @controller = Controller.new
+        @dialog = nil
+        @watcher = nil
+        @watched_selection = nil
+      end
+
+      def show
+        if @dialog&.visible?
+          @dialog.bring_to_front
+          return
+        end
+        @dialog = build_dialog
+        @dialog.show
+        attach_selection_observer
+      end
+
+      # Called by the selection observer: tell the page which cabinet (if any) is selected.
+      def push_selection
+        return unless @dialog&.visible?
+
+        script("CC.onSelection(#{js_json(@controller.selected_summary)})")
+      end
+
+      private
+
+      def build_dialog
+        dlg = ::UI::HtmlDialog.new(
+          dialog_title: 'CabinetCraft Pro', preferences_key: 'CabinetCraftPro.Dashboard',
+          scrollable: false, resizable: true, width: 460, height: 780, min_width: 380, min_height: 480,
+          style: ::UI::HtmlDialog::STYLE_DIALOG
+        )
+        dlg.set_file(File.join(CabinetCraft::PLUGIN_ROOT, 'ui', 'dashboard.html'))
+        dlg.add_action_callback('rpc') { |_ctx, payload| handle_rpc(payload) }
+        dlg.set_on_closed { detach_selection_observer }
+        dlg
+      end
+
+      def handle_rpc(payload)
+        req = JSON.parse(payload)
+        id = req['id']
+        method = req['method'].to_s
+        unless Controller::PUBLIC_METHODS.include?(method)
+          return reply(id, 'ok' => false, 'error' => "Unknown method #{method}")
+        end
+
+        reply(id, 'ok' => true, 'result' => @controller.public_send(method, *Array(req['args'])))
+      rescue StandardError => e
+        reply(id, 'ok' => false, 'error' => "#{e.class}: #{e.message}")
+      end
+
+      def reply(id, message)
+        script("CC.resolve(#{id.to_i}, #{js_json(message)})") if id
+      end
+
+      def script(code)
+        @dialog&.execute_script(code)
+      end
+
+      # JSON that is also safe as a JavaScript expression.
+      def js_json(obj)
+        JSON.generate(obj).gsub("\u2028", '\\u2028').gsub("\u2029", '\\u2029')
+      end
+
+      def attach_selection_observer
+        detach_selection_observer
+        @watched_selection = ::Sketchup.active_model.selection
+        @watcher = SelectionWatcher.new(self)
+        @watched_selection.add_observer(@watcher)
+      end
+
+      def detach_selection_observer
+        @watched_selection&.remove_observer(@watcher) if @watcher
+        @watched_selection = nil
+        @watcher = nil
+      end
+    end
+  end
+end
