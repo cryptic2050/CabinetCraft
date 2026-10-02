@@ -31,7 +31,8 @@
     { id: 'materials', label: 'MATERIALS', phase: 0 },
     { id: 'hardware', label: 'HARDWARE', phase: 0 },
     { id: 'parts', label: 'PARTS', phase: 0 },
-    { id: 'nesting', label: 'NESTING', phase: 4, scope: '2D sheet packing that respects grain, kerf and trim; sheet preview and utilisation. Will be described as a heuristic, not optimal.' },
+    { id: 'nesting', label: 'NESTING', phase: 0 },
+    { id: 'labels', label: 'LABELS', phase: 0 },
     { id: 'reports', label: 'REPORTS', phase: 0 },
     { id: 'cnc', label: 'CNC', phase: 5, scope: 'Machining data (hinge cups, shelf pins, connectors), DXF, and a post-processor framework.' },
     { id: 'settings', label: 'SETTINGS', phase: 0 }
@@ -40,7 +41,8 @@
     boot: null, tab: 'cabinets', unit: load('cc_unit', 'mm'),
     type: 'base_cabinet', params: null, editing: null, preview: null, cabinets: [], search: '', timer: null, busy: false,
     partsMode: 'project', projectRows: null, partsSearch: '', partsCabinet: '', partsMaterial: '', sort: { key: 'part_id', dir: 1 },
-    cutting: null, hw: null
+    cutting: null, hw: null,
+    nest: null, nestMat: 0, nestSheet: 0, nestSel: null, health: null, labels: null, lookup: null
   };
   function load(k, d) { try { return localStorage.getItem(k) || d; } catch (e) { return d; } }
   function save(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* storage may be blocked */ } }
@@ -103,6 +105,8 @@
     else if (S.tab === 'parameters') { v.innerHTML = parametersView(); bindParameters(); paintResults(); }
     else if (S.tab === 'materials') v.innerHTML = materialsView();
     else if (S.tab === 'parts') { v.innerHTML = partsShell(); bindParts(); loadParts(); }
+    else if (S.tab === 'nesting') { v.innerHTML = '<p class="mute">Loading...</p>'; loadNesting(); }
+    else if (S.tab === 'labels') { v.innerHTML = '<p class="mute">Loading...</p>'; loadLabels(); }
     else if (S.tab === 'reports') { v.innerHTML = '<p class="mute">Loading...</p>'; loadReports(); }
     else if (S.tab === 'hardware') { v.innerHTML = '<p class="mute">Loading...</p>'; loadHardware(); }
     else if (S.tab === 'project') { v.innerHTML = projectView(); bindProject(); }
@@ -250,8 +254,8 @@
     bindExports();
   }
 
-  function exportButtons(kind) {
-    const f = [['csv', 'CSV'], ['excel_csv', 'Excel CSV'], ['json', 'JSON']];
+  function exportButtons(kind, formats) {
+    const f = formats || [['csv', 'CSV'], ['excel_csv', 'Excel CSV'], ['json', 'JSON']];
     return `<div class="row" style="margin:8px 0"><span class="mute">Export:</span>${f.map(([fmt_, l]) => `<button class="ghost" data-export="${kind}" data-format="${fmt_}">${l}</button>`).join('')}</div>`;
   }
   function bindExports() {
@@ -278,6 +282,141 @@
       <div class="row" style="margin-top:8px"><span class="mute">Whole project:</span><button class="ghost" data-export="project" data-format="json">JSON backup</button></div>
       <p class="mute">PDF export: planned.</p>`;
     bindExports();
+  }
+
+  // ---- Nesting ----------------------------------------------------------------------
+  function loadNesting(settings) {
+    const args = settings ? [settings] : [];
+    return rpc('nest', args).then((n) => { S.nest = n; if (S.nestMat >= n.materials.length) S.nestMat = 0; paintNesting(); }).catch((e) => { showError(e); if (!S.nest) paintNesting(); });
+  }
+  const hue = (s) => { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
+
+  function paintNesting() {
+    const v = $('#view'); if (S.tab !== 'nesting') return;
+    const n = S.nest;
+    const st = n ? n.settings : { kerf: 4, trim: 10, spacing: 0 };
+    const form = `<div class="card"><div class="fields">
+      <div class="field"><label>Kerf (${S.unit})</label><input type="number" step="any" id="n_kerf" value="${toDisp(st.kerf)}"></div>
+      <div class="field"><label>Edge trim (${S.unit})</label><input type="number" step="any" id="n_trim" value="${toDisp(st.trim)}"></div>
+      <div class="field"><label>Extra spacing (${S.unit})</label><input type="number" step="any" id="n_spacing" value="${toDisp(st.spacing)}"></div>
+      <div class="field"><label>Sheet size override (${S.unit}) L x W</label><div class="row"><input type="number" id="n_sl" placeholder="material default" value="${st.sheet_length ? toDisp(st.sheet_length) : ''}" style="width:48%"><input type="number" id="n_sw" value="${st.sheet_width ? toDisp(st.sheet_width) : ''}" style="width:48%"></div></div></div>
+      <div class="row" style="padding:0 12px 12px"><button class="primary" id="n_run">NEST MATERIAL</button><button class="ghost" id="n_unlock">Unlock all parts</button></div></div>`;
+    if (!n || !n.materials.length) { v.innerHTML = `<h2>NESTING</h2>${form}<div class="card"><h3>Nothing to nest</h3><p>No cabinets in the model yet.</p></div>`; bindNestForm(); return; }
+    const t = n.totals; const m = n.materials[S.nestMat]; const sh = m.sheets[Math.min(S.nestSheet, m.sheets.length - 1)];
+    const stat = (k, val) => `<div class="card" style="flex:1;min-width:110px;text-align:center"><div class="mute" style="font-size:10px">${k}</div><div style="font-size:18px;font-weight:700">${val}</div></div>`;
+    const m2 = (mm2) => (mm2 / 1e6).toFixed(2) + ' m&sup2;';
+    const tabs = n.materials.map((x, i) => `<button class="ghost ${i === S.nestMat ? 'on' : ''}" data-mat="${i}">${esc(x.material)} (${x.total_sheets})</button>`).join('');
+    const sheetTabs = m.sheets.map((x, i) => `<button class="ghost ${sh && i === sh.index ? 'on' : ''}" data-sheet="${i}">Sheet ${i + 1} &middot; ${x.utilization}%</button>`).join('');
+    v.innerHTML = `<h2>NESTING</h2>${form}
+      <div class="row" style="gap:8px;margin-bottom:6px">${stat('TOTAL SHEETS', t.total_sheets)}${stat('TOTAL AREA', m2(t.total_area))}${stat('USED AREA', m2(t.used_area))}${stat('WASTE AREA', m2(t.waste_area))}${stat('UTILIZATION', t.utilization + ' %')}</div>
+      <p class="mute">${esc(m.algorithm)}. Grain runs along the sheet length${m.grain_free ? '; this material has no grain, so parts may rotate' : ''}.</p>
+      <div class="row" style="margin:8px 0">${tabs}</div>
+      ${m.unplaced.length ? `<ul class="issues">${m.unplaced.map((u) => `<li class="error"><b>DOES NOT FIT</b> ${esc(u.part_id)} (${fmt(u.length)} x ${fmt(u.width)} ${S.unit}) on a ${fmt(m.sheet_length)} x ${fmt(m.sheet_width)} sheet</li>`).join('')}</ul>` : ''}
+      ${m.released_locks.length ? `<ul class="issues">${m.released_locks.map((u) => `<li class="warning"><b>LOCK RELEASED</b> ${esc(u.part_id)}: ${esc(u.reason)}</li>`).join('')}</ul>` : ''}
+      ${sh ? `<div class="row" style="margin:8px 0">${sheetTabs}</div><div class="card" style="padding:6px">${sheetSvg(m, sh)}</div><div id="ninfo"></div>${cutList(sh)}
+        <p class="mute">Sheet ${fmt(m.sheet_length)} x ${fmt(m.sheet_width)} ${S.unit}, trim ${fmt(m.trim)}, kerf ${fmt(m.kerf)}. Used ${m2(sh.used_area)}, waste ${m2(sh.waste_area)}. Drag a part to move and lock it; click it for options.</p>` : '<p class="mute">No parts placed.</p>'}
+      <h2>EXPORT</h2>${exportButtons('nesting')}`;
+    bindNestForm(); bindNestSheet(m, sh); bindExports();
+    v.querySelectorAll('[data-mat]').forEach((b) => (b.onclick = () => { S.nestMat = +b.dataset.mat; S.nestSheet = 0; S.nestSel = null; paintNesting(); }));
+    v.querySelectorAll('[data-sheet]').forEach((b) => (b.onclick = () => { S.nestSheet = +b.dataset.sheet; S.nestSel = null; paintNesting(); }));
+  }
+  function bindNestForm() {
+    const run = $('#n_run'); if (!run) return;
+    run.onclick = () => {
+      const g = (id) => $(id).value;
+      const o = { kerf: fromDisp(g('#n_kerf')), trim: fromDisp(g('#n_trim')), spacing: fromDisp(g('#n_spacing')) };
+      if (g('#n_sl')) o.sheet_length = fromDisp(g('#n_sl')); if (g('#n_sw')) o.sheet_width = fromDisp(g('#n_sw'));
+      loadNesting(o);
+    };
+    $('#n_unlock').onclick = () => rpc('nest_unlock_all').then((n) => { S.nest = n; paintNesting(); toast('All parts unlocked'); }).catch(showError);
+  }
+  function sheetSvg(m, sh) {
+    const SL = m.sheet_length; const SW = m.sheet_width; const fs = Math.max(SL / 95, 14);
+    const parts = sh.placements.map((p) => {
+      const y = SW - p.y - p.h; const label = esc(p.part_id) + (p.locked ? ' \u{1F512}' : '');
+      const need = fs * 0.62 * p.part_id.length + fs; // approx. text length in sheet mm
+      let txt = '';
+      if (p.w > need && p.h > fs * 2.6) {
+        txt = `<text x="${p.x + fs / 2}" y="${y + fs * 1.1}" font-size="${fs}" fill="#fff">${label}</text><text x="${p.x + fs / 2}" y="${y + fs * 2.2}" font-size="${fs * 0.85}" fill="#ddd">${fmt(p.w)} x ${fmt(p.h)}</text>`;
+      } else if (p.h > need && p.w > fs * 2.6) { // tall and narrow: write along the part
+        txt = `<text transform="translate(${p.x + fs * 1.1} ${y + p.h - fs / 2}) rotate(-90)" font-size="${fs}" fill="#fff">${label}</text>`;
+      }
+      return `<g class="np ${S.nestSel === p.uid ? 'sel' : ''}" data-uid="${esc(p.uid)}" data-x="${p.x}" data-y="${p.y}" data-w="${p.w}" data-h="${p.h}" data-rot="${p.rotated}">
+        <rect x="${p.x}" y="${y}" width="${p.w}" height="${p.h}" fill="hsl(${hue(p.cabinet_label)} 45% 38%)" stroke="${p.locked ? '#f0a030' : '#0b0c0e'}" stroke-width="${p.locked ? fs / 4 : fs / 8}"/>${txt}</g>`;
+    }).join('');
+    return `<svg id="nsvg" viewBox="0 0 ${SL} ${SW}" style="width:100%;height:auto;display:block;touch-action:none"><rect width="${SL}" height="${SW}" fill="#2a2418"/>
+      <rect x="${m.trim}" y="${m.trim}" width="${SL - 2 * m.trim}" height="${SW - 2 * m.trim}" fill="#1c1f25" stroke="#6b7480" stroke-dasharray="${fs} ${fs / 2}" stroke-width="${fs / 8}"/>${parts}</svg>`;
+  }
+  function cutList(sh) {
+    const c = sh.cut_sequence;
+    if (!c.ok) return `<div class="card"><h3>Cut sequence</h3><p class="mute">${esc(c.reason)}.</p></div>`;
+    const steps = c.steps.map((x) => x.type === 'part' ? `<tr><td class="num">${x.step}</td><td colspan="2">&rarr; <b>${esc(x.part_id)}</b></td></tr>` :
+      `<tr><td class="num">${x.step}</td><td>${x.axis === 'horizontal' ? 'Cut along length at Y' : 'Cut across at X'} = ${fmt(x.position)} ${S.unit}</td><td class="mute">${fmt(x.from)} to ${fmt(x.to)}</td></tr>`).join('');
+    return `<details><summary>CUT SEQUENCE (${c.steps.length} steps)</summary><div class="card" style="margin:0;border:0"><table><tbody>${steps}</tbody></table><p class="mute">Positions measured from the sheet's bottom-left corner. Edge trim is cut first.</p></div></details>`;
+  }
+  function bindNestSheet(m, sh) {
+    const svg = $('#nsvg'); if (!svg || !sh) return;
+    const toMM = (ev) => { const pt = svg.createSVGPoint(); pt.x = ev.clientX; pt.y = ev.clientY; return pt.matrixTransform(svg.getScreenCTM().inverse()); };
+    svg.querySelectorAll('.np').forEach((g) => {
+      g.style.cursor = 'grab';
+      g.addEventListener('pointerdown', (ev) => {
+        ev.preventDefault(); const start = toMM(ev); const x0 = +g.dataset.x; const y0 = +g.dataset.y; const h = +g.dataset.h; let moved = false;
+        S.nestSel = g.dataset.uid; showNestInfo(m, sh);
+        const rect = g.querySelector('rect'); g.setPointerCapture(ev.pointerId);
+        const mv = (e) => { const p = toMM(e); const dx = p.x - start.x; const dy = p.y - start.y; if (Math.abs(dx) + Math.abs(dy) > 4) moved = true; g.setAttribute('transform', `translate(${dx} ${dy})`); };
+        const up = (e) => {
+          g.removeEventListener('pointermove', mv); g.removeEventListener('pointerup', up);
+          const p = toMM(e); if (!moved) { g.removeAttribute('transform'); return; }
+          const nx = Math.round(x0 + (p.x - start.x)); const ny = Math.round(y0 - (p.y - start.y));
+          rpc('nest_lock', [m.material, g.dataset.uid, sh.index, nx, ny, g.dataset.rot === 'true']).then((r) => {
+            if (r.ok === false) { toast(r.error); g.removeAttribute('transform'); return; }
+            S.nest = r; toast('Moved and locked'); paintNesting();
+          }).catch((er) => { toast(er.message); g.removeAttribute('transform'); });
+          void h; void rect;
+        };
+        g.addEventListener('pointermove', mv); g.addEventListener('pointerup', up);
+      });
+    });
+    showNestInfo(m, sh);
+  }
+  function showNestInfo(m, sh) {
+    const el = $('#ninfo'); if (!el) return; const p = sh.placements.find((x) => x.uid === S.nestSel);
+    document.querySelectorAll('.np').forEach((g) => g.classList.toggle('sel', g.dataset.uid === S.nestSel));
+    if (!p) { el.innerHTML = ''; return; }
+    el.innerHTML = `<div class="card"><h3>${esc(p.part_id)} <span class="mute">${esc(p.name)}</span></h3><p>${fmt(p.w)} x ${fmt(p.h)} ${S.unit} at (${fmt(p.x)}, ${fmt(p.y)}) ${p.rotated ? '&middot; rotated' : ''} ${p.locked ? '&middot; <b>locked</b>' : ''}</p>
+      <div class="row">${p.locked ? '<button class="ghost" id="n_ul">Unlock</button>' : '<button class="ghost" id="n_lk">Lock here</button>'}
+      <button class="ghost" id="n_rot">Rotate 90&deg;</button><span class="mute">Move to sheet</span><input type="number" id="n_to" min="1" max="${m.sheets.length + 1}" value="${sh.index + 1}" style="width:60px"><button class="ghost" id="n_mv">Go</button></div></div>`;
+    const after = (r) => { if (r.ok === false) { toast(r.error); return; } S.nest = r; paintNesting(); };
+    const lock = (sheet, rot) => rpc('nest_lock', [m.material, p.uid, sheet, p.x, p.y, rot]).then(after).catch(showError);
+    if ($('#n_ul')) $('#n_ul').onclick = () => rpc('nest_unlock', [p.uid]).then(after).catch(showError);
+    if ($('#n_lk')) $('#n_lk').onclick = () => rpc('nest_lock_current', [p.uid]).then(after).catch(showError);
+    $('#n_rot').onclick = () => lock(sh.index, !p.rotated);
+    $('#n_mv').onclick = () => lock(Math.max(0, parseInt($('#n_to').value, 10) - 1), p.rotated);
+  }
+
+  // ---- Labels ------------------------------------------------------------------------------
+  function loadLabels() { rpc('labels').then((l) => { S.labels = l; paintLabels(); }).catch(showError); }
+  function paintLabels() {
+    const v = $('#view'); if (S.tab !== 'labels' || !S.labels) return; const L = S.labels.labels;
+    const shown = L.slice(0, 48);
+    const cards = shown.map((l) => `<div class="lbl"><div class="lt"><div class="mute" style="font-size:9px">${esc(l.project)}</div><b>${esc(l.cabinet)} &middot; ${esc(l.part)}</b>
+      <div class="mono">${esc(l.part_id)}</div><div><b>${esc(l.dimensions)}</b> mm &times;${l.qty}</div><div>${esc(l.material)}</div><div class="mute">${esc(l.grain)} &middot; ${esc(l.edge_banding)}</div></div><div class="lq">${l.qr_svg}</div></div>`).join('');
+    v.innerHTML = `<h2>LABELS - ${esc(S.labels.project)}</h2>
+      ${L.length ? `<div class="row" style="margin-bottom:8px">${exportButtons('labels', [['html', 'Printable sheet (HTML)'], ['csv', 'CSV'], ['excel_csv', 'Excel CSV'], ['json', 'JSON']])}</div>
+      <p class="mute">${L.length} labels, one per part, each with a unique QR code. Open the HTML file in a browser to print or save as PDF (a direct PDF export is planned).</p>` : '<div class="card"><h3>No parts</h3><p>Create a cabinet first.</p></div>'}
+      <h2>IDENTIFY A PART</h2><div class="card"><div class="row"><input id="lk_code" placeholder="Paste or scan a QR code..." style="flex:1;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:7px"><button class="primary" id="lk_go">Find</button></div><div id="lk_out"></div>
+      <p class="mute">A barcode scanner or phone scanner returns text like CC1|&hellip;|side_left. Pasting it here finds the part in the model.</p></div>
+      ${L.length ? `<h2>PREVIEW</h2><div class="lblgrid">${cards}</div>${L.length > shown.length ? `<p class="mute">Showing ${shown.length} of ${L.length}; exports contain all.</p>` : ''}` : ''}
+      <p class="mute">QR codes carry only a part identifier. Part drawings, assembly steps and production status behind a scan are planned.</p>`;
+    bindExports();
+    $('#lk_go').onclick = () => rpc('lookup_part', [$('#lk_code').value]).then((r) => {
+      const out = $('#lk_out');
+      if (!r.ok) { out.innerHTML = `<ul class="issues"><li class="error">${esc(r.error)}</li></ul>`; return; }
+      const p = r.part;
+      out.innerHTML = `<div class="card" style="margin-top:8px"><h3>${esc(p.part_id)} <span class="mute">${esc(p.name)}</span></h3><p>${fmt(p.length)} x ${fmt(p.width)} x ${fmt(p.thickness)} ${S.unit} &middot; ${esc(p.material)} &middot; grain ${esc(GRAIN[p.grain])}<br>Edges: ${esc(p.edge_text)}<br>Hardware: ${esc(p.hardware)}<br>Position: ${esc(p.position)}</p>
+        <button class="ghost" id="lk_sel">Select in SketchUp</button></div>`;
+      $('#lk_sel').onclick = () => rpc('select_target', [r.cabinet.id, p.key]).catch(showError);
+    }).catch(showError);
   }
 
   // ---- Hardware --------------------------------------------------------------------
@@ -326,13 +465,31 @@
 
   function projectView() {
     const rows = S.cabinets.map((c) => `<tr class="clickable ${S.editing && S.editing.id === c.id ? 'sel' : ''}" data-id="${esc(c.id)}"><td>${esc(c.label)}</td><td class="num">${fmt(c.params.width)} x ${fmt(c.params.height)} x ${fmt(c.params.depth)}</td><td>v${c.version}</td></tr>`).join('');
-    return `<h2>PROJECT</h2><div class="card"><h3>${S.cabinets.length} cabinet${S.cabinets.length === 1 ? '' : 's'} in this model</h3>
-      <p>Click a row to select and zoom to it. Saved projects, folders and runs arrive in a later phase; today the SketchUp model is the project.</p>
-      ${S.cabinets.length ? `<table><thead><tr><th>CABINET</th><th>W x H x D (${S.unit})</th><th>REV</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="mute">No cabinets yet.</p>'}</div>
-      <p class="mute">Only top-level groups are scanned in this version.</p>`;
+    return `<h2>PROJECT</h2><div class="card"><div class="field"><label for="pname">Project name (printed on labels)</label><input id="pname" value="${esc(S.projName || '')}"></div>
+      <h3 style="margin-top:12px">${S.cabinets.length} cabinet${S.cabinets.length === 1 ? '' : 's'} in this model</h3>
+      ${S.cabinets.length ? `<table><thead><tr><th>CABINET</th><th>W x H x D (${S.unit})</th><th>REV</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="mute">No cabinets yet.</p>'}
+      <p class="mute">Click a row to select and zoom. Only top-level groups are scanned.</p></div>
+      <h2>PRE-PRODUCTION CHECK</h2><div id="health"><p class="mute">Checking...</p></div>`;
   }
   function bindProject() {
     document.querySelectorAll('tr[data-id]').forEach((r) => (r.onclick = () => rpc('select', [r.dataset.id]).catch(showError)));
+    rpc('project_state').then((p) => { S.projName = p.name; const i = $('#pname'); if (i) { i.value = p.name; i.onchange = () => rpc('set_project_name', [i.value]).then((q) => { S.projName = q.name; toast('Saved'); }).catch(showError); } }).catch(() => {});
+    runHealth();
+  }
+  function runHealth() {
+    rpc('validate').then((v) => { S.health = v; paintHealth(); }).catch(showError);
+  }
+  const SEV = { error: ['ERROR', 'err'], warning: ['WARNING', 'warn'] };
+  function paintHealth() {
+    const el = $('#health'); const v = S.health; if (!el || !v) return;
+    const sm = v.summary; const label = { valid: 'ALL CHECKS PASSED', warning: `${sm.warnings} WARNING${sm.warnings === 1 ? '' : 'S'}`, error: `${sm.errors} ERROR${sm.errors === 1 ? '' : 'S'}, ${sm.warnings} WARNING${sm.warnings === 1 ? '' : 'S'}` }[sm.status];
+    const cls = { valid: 'ok', warning: 'warn', error: 'err' }[sm.status];
+    const items = v.issues.map((i, n) => `<li class="${i.severity} ${i.cabinet_id || i.entity_id ? 'pick' : ''}" data-n="${n}"><b>${SEV[i.severity][0]}</b> ${i.cabinet_label ? esc(i.cabinet_label) + (i.part_id ? ' / ' + esc(i.part_id) : '') + ': ' : ''}${esc(i.message)}</li>`).join('');
+    el.innerHTML = `<div class="row" style="margin-bottom:8px"><span class="status ${cls}">${label}</span><button class="ghost" id="recheck">Re-check</button></div>
+      <ul class="issues">${items}</ul><p class="mute">Click an item to select it in SketchUp (a part opens its cabinet for editing). Not checked yet: ${esc(v.not_checked.join('; '))}.</p>`;
+    $('#recheck').onclick = runHealth;
+    el.querySelectorAll('li.pick').forEach((li) => (li.onclick = () => { const i = v.issues[+li.dataset.n]; rpc('select_target', [i.cabinet_id, i.part_key, i.entity_id]).catch(showError); }));
+    const h = $('#status'); if (S.tab === 'project') { /* header keeps showing the cabinet being edited */ }
   }
 
   function settingsView() {

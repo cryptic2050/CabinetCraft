@@ -66,6 +66,28 @@ equally. When drawers fill the cabinet, shelves/dividers are ignored *with a war
   `= + - @` are prefixed with `'` so spreadsheets cannot run them as formulas.
 * Part attributes in the model hold only scalar, stable values (IDs, size, material, edge text). Hardware text is recomputed.
 
+## Phase 4: nesting, labels / QR, validation
+
+* **Nesting** (`manufacturing/nesting.rb`): guillotine bin packing, best-area-fit, shorter-leftover-axis splits; four part
+  orderings are tried and the best kept (fewest unplaced, fewest sheets, biggest reusable offcut). **A heuristic - optimality is not
+  claimed or checked.** Rules: grain runs along the sheet length (parts with directional grain never rotate against it; non-grain
+  materials such as MDF/HDF may rotate), kerf + extra spacing between parts, edge trim, one nest per material. Part rows are the
+  input, so nesting always reflects the current model.
+* **Locks / manual moves**: dragging a part in the sheet preview validates (bounds, trim, kerf clearance, grain) and *locks* it.
+  Locks live in the .skp (`CabinetCraft_Project` model attributes), keyed by part UID plus a size signature. Re-nesting keeps locked
+  parts fixed and packs the rest around them; a lock whose part changed size or no longer fits is released and reported.
+* **Cut sequence** (`manufacturing/cut_sequence.rb`): derived from the final layout by finding edge-to-edge cuts whose kerf slot
+  crosses no part. If none exists (possible with manual layouts) the UI says so instead of inventing a sequence.
+* **Labels / QR** (`manufacturing/labels.rb`, `utilities/qr_code.rb`, `exporters/label_html.rb`): one label per part. The QR holds
+  only `CC1|<cabinet uuid>|<part key>`; `Controller#lookup_part` resolves it against the live model. The QR encoder is original code
+  (byte mode, level M, versions 1-10); it was verified module-for-module against the python-qrcode reference for all payload lengths
+  1-213 (`tests/tools/qr_crosscheck.py`, dev only). Printable output is HTML (print / save as PDF from a browser).
+* **Validation** (`validation/`, `scene/model_checker.rb`): pure checks (impossible geometry, missing panels, invalid sizes,
+  missing material/hardware/edge banding, grain, duplicate cabinet/part IDs, overlapping parts classified as door/drawer
+  collisions, clearances, nesting failures) plus model checks against the real SketchUp geometry (deleted parts, hand-edited part
+  geometry, scaled cabinets, missing/wrong IDs, overlapping cabinets). Every issue carries cabinet/part so the UI can select it;
+  selecting a part opens its cabinet for editing.
+
 ## Folder layout
 
 ```
@@ -75,11 +97,14 @@ cabinetcraft/
     main.rb                      toolbar + menu
     core/        units parameter material construction rules panel cabinet library edge_banding hardware hardware_rules
     generators/  panel_generator (pure)  cabinet_generator (SketchUp geometry)
-    scene/       attributes registry settings_store
-    manufacturing/ parts_list cutting_list     exporters/ csv_exporter json_exporter
+    scene/       attributes registry settings_store project_store model_checker
+    manufacturing/ parts_list cutting_list nesting cut_sequence labels
+    exporters/   csv_exporter json_exporter label_html
+    utilities/   qr_code
+    validation/  validator collision_checker
     ui/          controller dialog dashboard.html/.css/.js
     resources/   cabinet.svg
-    validation/ libraries/ utilities/   (empty: reserved for later phases)
+    libraries/   (empty: reserved for later phases)
   tests/         test_rules  test_parameter_units_cabinet  test_scene  mock_sketchup  ui_bridge (dev harness)
   run_tests.sh
 ```
@@ -108,6 +133,12 @@ cabinetcraft/
 | 3 | Parts list: project-wide, sort / filter / search; export CSV, Excel CSV, JSON | IMPLEMENTED |
 | 3 | Cutting list: grouped identical parts, area, sheet estimate, band + hardware totals; export | IMPLEMENTED (sheet count = estimate, not nesting) |
 | 3 | PDF export, in-table editing of parts, per-edge manual banding, locks placement | PLANNED |
-| 4-6 | nesting, labels/QR, validation suite, machining, DXF, CNC, templates, standards, costs, assembly | PLANNED |
+| 4 | Nesting: grain, kerf, trim, spacing, per-material, totals (sheets, area, used, waste, utilisation) | IMPLEMENTED (heuristic, not optimal) |
+| 4 | Sheet preview, drag to move, lock / unlock, rotate, move to another sheet, cut sequence | IMPLEMENTED (cut sequence only when the layout is guillotine-cuttable) |
+| 4 | Labels with unique QR per part; printable HTML; CSV / JSON; paste-a-code lookup | IMPLEMENTED |
+| 4 | QR opening drawings, assembly steps, production status | PLANNED |
+| 4 | Pre-production validation with click-to-select | IMPLEMENTED (drilling check not possible until Phase 5) |
+| 4 | Direct PDF output (labels, nesting, cutting list) | PLANNED |
+| 5-6 | machining, DXF, CNC, templates, standards, costs, assembly | PLANNED |
 | - | All other library cabinets (wall, tall, wardrobe, vanity, TV, corner...) | PLANNED - listed, not selectable |
 | - | PLACEHOLDER | none: no control exists that does nothing |

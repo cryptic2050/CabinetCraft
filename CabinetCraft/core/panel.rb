@@ -62,6 +62,11 @@ module CabinetCraft
       axis == plane_axes[1] ? "L#{n}" : "W#{n}"
     end
 
+    # Where the part sits, measured from the cabinet's left-front-bottom corner.
+    def assembly_position
+      "x #{origin[0].round(1)} / y #{origin[1].round(1)} / z #{origin[2].round(1)} mm"
+    end
+
     # { 'L1' => 1.0, ... } for banded edges only.
     def edge_codes
       edges.to_h { |face, mm| [edge_code(face), mm] }.sort.to_h
@@ -143,6 +148,7 @@ module CabinetCraft
         'grain' => grain.to_s,
         'edge_codes' => edge_codes,
         'edge_text' => edge_text,
+        'position' => assembly_position,
         'qty' => 1
       }
     end

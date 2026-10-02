@@ -6,8 +6,10 @@ require 'sketchup.rb'
   core/units core/material core/construction core/hardware core/parameter core/rules core/edge_banding core/panel
   core/hardware_rules core/cabinet core/library
   generators/panel_generator generators/cabinet_generator
-  manufacturing/parts_list manufacturing/cutting_list exporters/csv_exporter exporters/json_exporter
-  scene/attributes scene/registry scene/settings_store
+  manufacturing/parts_list manufacturing/cutting_list manufacturing/cut_sequence manufacturing/nesting manufacturing/labels
+  exporters/csv_exporter exporters/json_exporter exporters/label_html utilities/qr_code
+  validation/collision_checker validation/validator
+  scene/attributes scene/registry scene/settings_store scene/project_store scene/model_checker
   ui/controller ui/dialog
 ].each { |f| require File.join(CabinetCraft::PLUGIN_ROOT, f) }
 

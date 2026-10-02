@@ -259,3 +259,183 @@ class TestSceneReports < Minitest::Test
     JSON.generate(prev)
   end
 end
+
+class TestScenePhase4 < Minitest::Test
+  def setup
+    Sketchup.reset_model!
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    @c = CabinetCraft::Interface::Controller.new
+    @model = Sketchup.active_model
+  end
+
+  def groups
+    @model.entities.grep(Sketchup::Group)
+  end
+
+  def codes(v)
+    v['issues'].map { |i| i['code'] }
+  end
+
+  # --- Nesting through the controller ------------------------------------------------------
+  def test_nest_covers_all_parts_and_is_valid
+    @c.create('base_double_door', {})
+    @c.create('base_drawer_3', {})
+    res = @c.nest
+    placed = res['materials'].sum { |m| m['sheets'].sum { |s| s['placements'].size } }
+    assert_equal @c.parts_list['rows'].size, placed
+    assert_equal 0, res['totals']['unplaced']
+    assert_operator res['totals']['utilization'], :>, 0
+    JSON.generate(res)
+    assert(res['materials'].all? { |m| m['sheets'].all? { |s| s['cut_sequence']['ok'] } })
+  end
+
+  def test_nest_settings_are_validated_and_persisted_in_model
+    @c.create('base_single_door', {})
+    assert_raises(ArgumentError) { @c.nest('kerf' => -2) }
+    res = @c.nest('kerf' => 3.2, 'trim' => 5, 'spacing' => 1)
+    assert_equal [3.2, 5.0, 1.0], res['settings'].values_at('kerf', 'trim', 'spacing')
+    assert_equal 3.2, @c.project_state['nest_settings']['kerf'] # stored in the model, survives a new controller
+    assert_equal 3.2, CabinetCraft::Interface::Controller.new.nest['settings']['kerf']
+  end
+
+  def test_manual_move_locks_and_survives_renest_and_unlock
+    @c.create('base_single_door', {})
+    res = @c.nest
+    mat = res['materials'].first
+    pl = mat['sheets'][0]['placements'].first
+    free_x = 2440 - 10 - pl['w'] - 1 # bottom-right corner region of an otherwise empty sheet area is not guaranteed free; use a far corner check
+    bad = @c.nest_lock(mat['material'], pl['uid'], 0, 0, 0, false)
+    refute bad['ok']
+    assert_match(/Outside/, bad['error'])
+    # lock the part exactly where it is, then move another part elsewhere
+    locked = @c.nest_lock_current(pl['uid'])
+    assert locked['ok']
+    again = @c.nest['materials'].first['sheets'][0]['placements'].find { |p| p['uid'] == pl['uid'] }
+    assert_equal [pl['x'], pl['y'], true], again.values_at('x', 'y', 'locked')
+    assert @c.nest_unlock(pl['uid'])['ok']
+    refute @c.nest['materials'].first['sheets'][0]['placements'].find { |p| p['uid'] == pl['uid'] }['locked']
+    _ = free_x
+  end
+
+  def test_lock_is_released_when_the_part_changes
+    cab = @c.create('base_single_door', {})['cabinet']
+    row = @c.parts_list['rows'].find { |r| r['key'] == 'bottom' }
+    @c.nest_lock_current(row['part_uid'])
+    @c.update(cab['id'], cab['params'].merge('width' => 800)) # bottom changes size
+    res = @c.nest
+    assert_equal ['part size changed'], res['materials'].flat_map { |m| m['released_locks'] }.map { |l| l['reason'] }
+    assert(@c.validate['issues'].any? { |i| i['code'] == 'lock_released' })
+  end
+
+  # --- Labels and lookup ---------------------------------------------------------------------
+  def test_labels_and_scan_lookup
+    @c.create('base_single_door', {})
+    @c.set_project_name('VALENTINA KITCHEN')
+    labels = @c.labels
+    assert_equal 'VALENTINA KITCHEN', labels['project']
+    code = labels['labels'].find { |l| l['part_id'] == 'B01-DOOR_1' }['qr_payload']
+    found = @c.lookup_part(code)
+    assert found['ok']
+    assert_equal 'Door 1', found['part']['name']
+    assert_equal 'B01', found['cabinet']['label']
+    refute_empty found['hardware']
+    refute @c.lookup_part('hello')['ok']
+    refute @c.lookup_part("CC1|#{SecureRandom.uuid}|door_1")['ok']
+    stale = code.sub('door_1', 'door_9')
+    assert_match(/no part/, @c.lookup_part(stale)['error'])
+  end
+
+  def test_label_and_nesting_exports
+    @c.create('base_single_door', {})
+    Dir.mktmpdir do |dir|
+      html = File.join(dir, 'l.html')
+      assert @c.export('labels', 'html', html)['ok']
+      assert_includes File.read(html), 'Untitled project'
+      csv = File.join(dir, 'l.csv')
+      @c.export('labels', 'csv', csv)
+      assert_match(/^Project,Cabinet,Part,Part ID,Dimensions/, File.read(csv))
+      nest = File.join(dir, 'n.csv')
+      @c.export('nesting', 'csv', nest)
+      assert_match(/^Material,Sheet,Part ID/, File.read(nest))
+      assert_equal @c.parts_list['rows'].size + 1, File.read(nest).lines.size
+    end
+  end
+
+  # --- Validation against the real model ----------------------------------------------------------
+  def test_clean_model_is_valid
+    @c.create('base_double_door', {})
+    @c.create('base_drawer_3', {})
+    v = @c.validate
+    assert_equal 'valid', v['summary']['status'], v['issues'].inspect
+    assert_equal 2, v['cabinet_count']
+  end
+
+  def test_deleted_part_is_detected_and_selectable
+    cab = @c.create('base_single_door', {})['cabinet']
+    group = groups.first
+    group.entities.grep(Sketchup::Group).find { |g| g.name == 'B01-SHELF_1' }.erase!
+    v = @c.validate
+    issue = v['issues'].find { |i| i['code'] == 'missing_in_model' }
+    assert_equal 'error', issue['severity']
+    assert_equal 'shelf_1', issue['part_key']
+    assert_equal 'error', v['summary']['status']
+    # editing the cabinet regenerates it
+    @c.update(cab['id'], cab['params'].merge('width' => 700))
+    refute_includes codes(@c.validate), 'missing_in_model'
+  end
+
+  def test_manually_edited_part_geometry_is_flagged
+    @c.create('base_single_door', {})
+    side = groups.first.entities.grep(Sketchup::Group).find { |g| g.name == 'B01-SIDE_LEFT' }
+    side.entities.clear!
+    big = CabinetCraft::Panel.new(key: 'x', name: 'x', role: :side, origin: [0, 0, 0], size: [18, 562, 900], thickness_axis: :x, material_id: 'mdf_18', material_label: 'm')
+    CabinetCraft::Generators::CabinetGenerator.build_box(side.entities, big)
+    issue = @c.validate['issues'].find { |i| i['code'] == 'geometry_modified' }
+    assert_equal 'warning', issue['severity']
+    assert_equal 'side_left', issue['part_key']
+  end
+
+  def test_scaled_cabinet_and_overlapping_cabinets_flagged
+    @c.create('base_single_door', {})
+    @c.create('base_single_door', {})
+    a, b = groups
+    b.transform!(Geom::Transformation.new(Geom::Point3d.new(Units_mm(100), 0, 0))) # slide B onto A
+    a.transformation.xscale = 1.5
+    assert_includes codes(@c.validate), 'cabinets_overlap'
+    assert_includes codes(@c.validate), 'cabinet_scaled'
+  end
+
+  def Units_mm(mm)
+    mm / 25.4
+  end
+
+  def test_unreadable_cabinet_data_is_reported_with_entity_id
+    @c.create('base_single_door', {})
+    group = groups.first
+    group.set_attribute('CabinetCraft', 'params_json', '{broken')
+    issue = @c.validate['issues'].find { |i| i['code'] == 'unreadable_cabinet' }
+    assert issue['entity_id']
+    assert @c.select_target(nil, nil, issue['entity_id'])['ok']
+    assert_equal group, @model.selection.first
+  end
+
+  def test_nesting_failure_for_oversized_cabinet_is_selectable
+    cab = @c.create('base_cabinet', 'width' => 3000, 'door_count' => 0, 'shelf_count' => 0)['cabinet']
+    issue = @c.validate['issues'].find { |i| i['code'] == 'nesting_failure' }
+    assert_equal cab['id'], issue['cabinet_id']
+    r = @c.select_target(issue['cabinet_id'], issue['part_key'])
+    assert r['ok']
+    assert_equal 'part', r['selected']
+    assert_equal "#{cab['label']}-#{issue['part_key'].upcase}", @model.selection.first.name
+    assert_equal [groups.first], @model.active_path
+  end
+
+  def test_select_target_cabinet_level_and_unknown
+    cab = @c.create('base_single_door', {})['cabinet']
+    @model.active_path = [groups.first]
+    assert @c.select_target(cab['id'])['ok']
+    assert_nil @model.active_path
+    refute @c.select_target('nope')['ok']
+    refute @c.select_target(nil)['ok']
+  end
+end

@@ -1,6 +1,11 @@
-# CabinetCraft Pro (Phases 1-3)
+# CabinetCraft Pro (Phases 1-4)
 
 Parametric cabinet design to manufacturing data inside SketchUp. Original code; not derived from any other plugin.
+
+**Phase 4 adds** sheet nesting (grain, kerf, trim, spacing; sheet preview with drag-to-move and part locks; real cut sequence when the
+layout allows it), production labels with a unique QR code per part, and a pre-production check that compares the data *and* the
+SketchUp geometry (deleted or hand-edited parts, scaled or overlapping cabinets, duplicate IDs, missing hardware, nesting failures);
+clicking an issue selects it in the model.
 
 **Phase 3 adds** edge banding (rule-based per panel), a hardware library with custom items and rule-based placement
 (hinge count by door height from an editable table, handles, runners, connectors, shelf pins, feet), a project-wide parts list
@@ -32,6 +37,9 @@ Open it from the **CabinetCraft Pro** toolbar button or *Extensions > CabinetCra
 3. Edit any value afterwards: only that cabinet is regenerated (one Undo step per change). Select a cabinet in the model to edit it.
 4. PARTS lists every part of every cabinet; REPORTS shows the cutting list; HARDWARE manages the library and hinge rules.
    Export buttons ask where to save the file.
+5. NESTING: set kerf/trim and press NEST MATERIAL. Drag a part to move and lock it (orange outline); click a part to rotate, unlock
+   or send it to another sheet. LABELS: preview, print the HTML sheet, or paste a scanned code to find a part. PROJECT: set the
+   project name and read the pre-production check; click an issue to select it.
 
 Construction profile **Standard** is self-consistent (overall height = bottom + sides). **Specification example**
 reproduces the numbers in the product brief (sides 742, back 581x695, rail 564x100); those numbers stack to 760 mm, not 757 mm,
@@ -42,7 +50,8 @@ and the engine warns about it.
 ```
 ./run_tests.sh      # needs only Ruby >= 3.0
 ```
-Covers the dimension engine (widths 600/800/900/1200, materials 18/16/15, 1-3 doors, 0/1/2/4 shelves, back thicknesses,
+Covers nesting (random layouts checked for bounds, kerf, grain and cut-sequence soundness), the QR encoder (cross-checked against
+a reference implementation when Python + qrcode are installed), validation, labels, and the dimension engine (widths 600/800/900/1200, materials 18/16/15, 1-3 doors, 0/1/2/4 shelves, back thicknesses,
 panel overlap/bounds invariants, the brief's exact example), parameter validation, units, and - against a small SketchUp **mock** -
 the generator, registry, controller, undo operations and duplicate-ID repair.
 
@@ -58,10 +67,17 @@ the generator, registry, controller, undo operations and duplicate-ID repair.
 * Toe kick is a single plinth board; no legs or brackets.
 * Dividers span only the door/open zone; shelves are evenly spaced and the same count in every compartment.
 * Rule constants for drawers (clearance 13 mm, box lift 10 mm, height deduction 40 mm, 50 mm depth steps) are my assumptions - check them against your runners.
-* Sheet counts in the cutting list are an area-based estimate (area + 10% waste), **not** a nesting result.
+* Nesting is a **heuristic, not optimal** (guillotine best-area-fit, best of 4 orderings). Sheet grain is assumed to run along the sheet
+  length; one sheet size per material (optional global override); leftover offcuts are not tracked; parts are only ever nested whole.
+* A manually arranged layout may not be cuttable with edge-to-edge cuts; the cut sequence is then withheld and the UI says why.
+* The cutting-list sheet count (REPORTS) remains an area estimate; NESTING shows the real placed-sheet count.
+* QR codes hold a part identifier only (`CC1|<cabinet id>|<part key>`); they need an external scanner and the "Identify a part" box
+  to resolve them. Drawings / assembly steps / production status behind a scan, and direct PDF output, are not implemented.
+* Validation does **not** check drilling (no machining data until Phase 5). Part-geometry edits are detected to 0.2 mm. Selecting a
+  part from an issue opens its cabinet group for editing.
 * Edge banding: finished sizes only (band thickness not deducted); fixed rules per part role, no per-edge manual editing yet.
 * Hardware: quantities and text positions only - no drilling coordinates, prices not used yet, locks are in the library but never placed automatically.
 * Handle position rules (50 mm from the free edge, 100 mm below the top), hinge inset (100 mm), connector spacing (200 mm) are my defaults - editable in HARDWARE.
 * Custom hardware is stored per user (SketchUp defaults), not inside the .skp; opening a model on another machine shows "Unknown hardware" warnings for custom items.
-* PDF export, editing parts in the table, and the Notes column are not implemented.
-* Manual dimension overrides, editable materials and everything in Phases 4-6 are not implemented.
+* PDF export (use the printable HTML labels), editing parts in the table, and the Notes column are not implemented.
+* Manual dimension overrides, editable materials and everything in Phases 5-6 are not implemented.

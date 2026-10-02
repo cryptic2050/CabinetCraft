@@ -21,9 +21,11 @@ module Geom
 
   class Transformation
     attr_reader :origin
+    attr_accessor :xscale, :yscale, :zscale
 
     def initialize(origin = Point3d.new)
       @origin = origin
+      @xscale = @yscale = @zscale = 1.0
     end
   end
 end
@@ -115,7 +117,7 @@ module Sketchup
     end
 
     def add_group
-      g = Group.new(@owner.model)
+      g = Group.new(@owner.model, self)
       @items << g
       g
     end
@@ -135,8 +137,9 @@ module Sketchup
     attr_reader :entities, :model, :transformation
     attr_accessor :name, :material
 
-    def initialize(model)
+    def initialize(model, parent = nil)
       @model = model
+      @parent = parent
       @entities = Entities.new(self)
       @attrs = Hash.new { |h, k| h[k] = {} }
       @transformation = Geom::Transformation.new
@@ -147,6 +150,14 @@ module Sketchup
 
     def make_unique
       @made_unique += 1
+    end
+
+    def entityID
+      object_id
+    end
+
+    def erase!
+      @parent&.instance_variable_get(:@items)&.delete_if { |e| e.equal?(self) }
     end
 
     def transform!(t)
@@ -233,6 +244,19 @@ module Sketchup
 
   class Model
     attr_reader :entities, :materials, :selection, :active_view, :ops
+    attr_accessor :active_path, :title
+
+    def set_attribute(dict, key, value)
+      (@attrs ||= {})[[dict, key]] = value
+    end
+
+    def get_attribute(dict, key, default = nil)
+      (@attrs ||= {}).fetch([dict, key], default)
+    end
+
+    def find_entity_by_id(id)
+      entities.find { |e| e.respond_to?(:entityID) && e.entityID == id }
+    end
 
     def initialize
       @owner = Struct.new(:model).new(self)
