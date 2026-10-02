@@ -69,7 +69,27 @@ module CabinetCraft
         out.concat(check_hardware(cab))
         out.concat(check_edges_and_grain(cab))
         out.concat(check_edge_options(cab))
+        out.concat(check_overrides(cab))
         out.concat(check_clearances(cab, p))
+        out
+      end
+
+      def check_overrides(cab)
+        out = []
+        cab.orphan_overrides.each do |k|
+          out << issue(:warning, 'override_orphan', "Manual override for '#{k}' is ignored: that part no longer exists (reset it or restore the part)", cabinet: cab, part_key: k)
+        end
+        cab.auto_panels.each do |ap|
+          ov = cab.overrides[ap.key]
+          next unless ov && (ov.key?('thickness') || ov.key?('material'))
+
+          eff = cab.panels.find { |p| p.key == ap.key }
+          mat = Material.find(eff.material_id)
+          next if mat.nil? || %i[back drawer_box].include?(eff.role)
+          next if (mat.thickness - eff.thickness).abs < 1e-6
+
+          out << issue(:warning, 'override_thickness', "#{eff.name}: thickness #{eff.thickness.round(2)} mm does not match #{mat.name} (#{mat.thickness} mm)", cabinet: cab, part_key: ap.key)
+        end
         out
       end
 

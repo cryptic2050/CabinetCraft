@@ -41,20 +41,22 @@ module CabinetCraft
         issues << { 'severity' => 'warning', 'key' => nil, 'message' => "Hardware '#{id}' is not in the library" } unless Hardware.find(id)
       end
 
-      doors(params, values, config, st, add)
-      drawers(params, values, add)
+      doors(params, panels, config, st, add)
+      drawers(params, panels, add)
       connectors(params, values, panels, st, add)
       shelf_pins(panels, st, add)
       feet(params, add)
       [items, issues.uniq]
     end
 
-    def doors(params, values, config, st, add)
-      n = values['door_widths'].size
+    # Dimensions come from the panels (not the rule values) so manual overrides flow into hardware quantities.
+    def doors(params, panels, config, st, add)
+      door_panels = panels.select { |p| p.role == :door }.sort_by(&:key)
+      n = door_panels.size
       handle = params['handle_type']
-      values['door_widths'].each_index do |i|
-        key = "door_#{i + 1}"
-        h = values['door_height']
+      door_panels.each_with_index do |door, i|
+        key = door.key
+        h = door.size[2]
         count = config.hinge_count(h)
         side = hinge_side(i, n, params['hinge_side'])
         pos = hinge_positions(h, count, st['hinge_inset'])
@@ -66,10 +68,11 @@ module CabinetCraft
       end
     end
 
-    def drawers(params, values, add)
-      values['drawer_fronts'].each_index do |i|
-        key = "drawer_#{i + 1}_front"
-        add.call(params['runner_type'], 1, key, "pair, length #{values['drawer_box_depth']} mm")
+    def drawers(params, panels, add)
+      panels.select { |p| p.role == :drawer_front }.sort_by(&:key).each_with_index do |front, i|
+        key = front.key
+        side = panels.find { |p| p.key == "drawer_#{i + 1}_side_left" }
+        add.call(params['runner_type'], 1, key, "pair, length #{side ? side.size[1].round(1) : '?'} mm")
         add.call(params['handle_type'], 1, key, 'centred on front') unless params['handle_type'] == 'none'
       end
     end
@@ -90,12 +93,13 @@ module CabinetCraft
 
     # Joints: [owner part key, joint length]. Fixings sit on the owner part.
     def joints(values, panels)
-      keys = panels.map(&:key)
+      by_key = panels.to_h { |p| [p.key, p] }
+      depth = ->(k) { by_key[k].size[1] } # joint length = the part's depth (y)
       list = []
-      list << ['side_left', values['side_depth']] << ['side_right', values['side_depth']]
-      %w[brace_front brace_rear].each { |k| 2.times { list << [k, values['brace_depth']] } if keys.include?(k) }
-      2.times { list << ['zone_shelf', values['back_y']] } if keys.include?('zone_shelf')
-      panels.select { |p| p.role == :divider }.each { |p| list << [p.key, values['divider_depth']] }
+      %w[side_left side_right].each { |k| list << [k, depth.call(k)] if by_key[k] }
+      %w[brace_front brace_rear].each { |k| 2.times { list << [k, depth.call(k)] } if by_key[k] }
+      2.times { list << ['zone_shelf', depth.call('zone_shelf')] } if by_key['zone_shelf']
+      panels.select { |p| p.role == :divider }.each { |p| list << [p.key, p.size[1]] }
       list
     end
 

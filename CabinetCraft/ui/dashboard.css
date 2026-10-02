@@ -60,3 +60,6 @@ select{background:var(--panel2);color:var(--text);border:1px solid var(--line);b
 .mono{font-family:ui-monospace,Menlo,Consolas,monospace}
 .issues li.pick{cursor:pointer}.issues li.pick:hover{filter:brightness(1.25)}
 .card svg{max-width:100%;height:auto}
+
+.badge.warnb{background:#3d2c18;color:var(--warn)}
+details.partcard{margin:0 0 8px;background:var(--panel2)}details.partcard summary{font-size:12px;letter-spacing:.02em;color:var(--text)}

@@ -36,6 +36,7 @@ module CabinetCraft
                           project_state set_project_name nest nest_lock nest_lock_current nest_unlock nest_unlock_all
                           labels lookup_part validate select_target
                           materials_state save_material delete_material reset_material
+                          advanced_parts set_override reset_overrides
                           machining_state set_machining_setting add_pattern delete_pattern select_machine save_machine
                           delete_machine save_post delete_post cnc_check cnc_preview].freeze
 
@@ -68,14 +69,18 @@ module CabinetCraft
         { 'cabinets' => Scene::Registry.cabinets(model).map { |_, c| c.summary } }
       end
 
-      # Pure calculation: no model changes. Drives the live panel table.
-      def preview(type, raw, label = nil)
+      # Pure calculation: no model changes. Drives the live panel table. When `cabinet_id` is given, that
+      # cabinet's manual overrides are included so the table matches what the model will show.
+      def preview(type, raw, label = nil, cabinet_id = nil)
         Library.entry(type) or return failure("Unknown cabinet type '#{type}'")
         # Preset defaults sit under whatever the caller supplies.
         params, errors = Parameter.coerce(Library.defaults_for(type).merge((raw || {}).transform_keys(&:to_s)))
         return { 'ok' => false, 'params' => params, 'issues' => errors, 'panels' => [], 'values' => {} } unless errors.empty?
 
         cab = Cabinet.build(type: type, params: params, label: label || Scene::Registry.next_label(model))
+        if cabinet_id && (found = Scene::Registry.find(model, cabinet_id))
+          cab = cab.with_overrides(found[1].overrides)
+        end
         issues = cab.calculation.issues.map(&:to_h)
         ok = cab.calculation.ok?
         issues += cab.hardware_issues if ok
@@ -104,20 +109,100 @@ module CabinetCraft
       end
 
       # Regenerates only the one cabinet that changed.
-      def update(cabinet_id, raw)
+      #
+      # `mode` decides what happens when the change would alter a manually overridden size:
+      #   nil     - nothing is changed; the reply has 'needs_confirmation' => true and the 'affected' parts
+      #   'keep'  - apply the change, keep every override
+      #   'reset' - apply the change and return the affected overridden fields to AUTO
+      def update(cabinet_id, raw, mode = nil)
         group, current = Scene::Registry.find(model, cabinet_id)
         return failure('That cabinet no longer exists in the model') unless group
 
-        prev = preview(current.type, raw, current.label)
+        prev = preview(current.type, raw, current.label, cabinet_id)
         return prev.merge('updated' => false) unless prev['ok']
         return prev.merge('updated' => false, 'cabinet' => current.summary) if prev['params'] == current.params
 
-        updated = current.with_params(prev['params'])
+        overrides = current.overrides
+        unless overrides.empty?
+          candidate = current.with_params(prev['params'])
+          affected = Overrides.affected(current.auto_panels, candidate.auto_panels, overrides)
+          if affected.any?
+            unless %w[keep reset].include?(mode)
+              named = affected.map { |a| a.merge('part_id' => "#{current.label}-#{a['part_key'].upcase}") }
+              return prev.merge('updated' => false, 'needs_confirmation' => true, 'affected' => named, 'cabinet' => current.summary)
+            end
+            overrides = Overrides.reset_affected(overrides, affected) if mode == 'reset'
+          end
+        end
+        updated = current.with_params(prev['params'], overrides: overrides)
         in_operation('CabinetCraft: Edit cabinet') do
           Generators::CabinetGenerator.rebuild(group, updated)
           snapshot_materials
         end
-        prev.merge('updated' => true, 'cabinet' => updated.summary, 'panels' => updated.part_rows)
+        prev.merge('updated' => true, 'cabinet' => updated.summary, 'panels' => updated.part_rows, 'reset' => mode == 'reset')
+      end
+
+      # --- Manual overrides ("advanced parts") --------------------------------------------------
+
+      def advanced_parts(cabinet_id)
+        _, cab = Scene::Registry.find(model, cabinet_id)
+        return failure('That cabinet no longer exists in the model') unless cab
+
+        advanced_state(cab)
+      end
+
+      # fields: { 'length' => 700, 'width' => '', 'offset_x' => 5, 'material' => 'ply_18', 'edges' => { 'front' => 1 } };
+      # a blank value returns that field to AUTO.
+      def set_override(cabinet_id, part_key, fields)
+        group, cab = Scene::Registry.find(model, cabinet_id)
+        raise ArgumentError, 'That cabinet no longer exists in the model' unless group
+
+        auto = cab.auto_panels.find { |p| p.key == part_key } or raise ArgumentError, "Unknown part '#{part_key}'"
+        part = Overrides.clean_part(auto, fields || {}, cab.overrides[part_key] || {})
+        new_ov = cab.overrides.reject { |k, _| k == part_key }
+        new_ov = new_ov.merge(part_key => part) unless part.empty?
+        return advanced_state(cab) if new_ov == cab.overrides
+
+        apply_overrides(group, cab, new_ov)
+      end
+
+      # Returns every overridden field of one part (or of the whole cabinet) to AUTO.
+      def reset_overrides(cabinet_id, part_key = nil)
+        group, cab = Scene::Registry.find(model, cabinet_id)
+        raise ArgumentError, 'That cabinet no longer exists in the model' unless group
+
+        new_ov = part_key ? cab.overrides.reject { |k, _| k == part_key } : {}
+        return advanced_state(cab) if new_ov == cab.overrides
+
+        apply_overrides(group, cab, new_ov)
+      end
+
+      def apply_overrides(group, cab, new_ov)
+        updated = cab.with_overrides(new_ov)
+        in_operation('CabinetCraft: Override part') { Generators::CabinetGenerator.rebuild(group, updated) }
+        advanced_state(updated)
+      end
+
+      def advanced_state(cab)
+        eff = cab.panels.to_h { |p| [p.key, p] }
+        strs = ->(h) { h.transform_keys(&:to_s) }
+        rows = cab.auto_panels.map do |ap|
+          ep = eff[ap.key]
+          ov = cab.overrides[ap.key] || {}
+          fields = {
+            'length' => { 'auto' => ap.length.round(3), 'value' => ov['length'], 'effective' => ep.length.round(3) },
+            'width' => { 'auto' => ap.width.round(3), 'value' => ov['width'], 'effective' => ep.width.round(3) },
+            'thickness' => { 'auto' => ap.thickness.round(3), 'value' => ov['thickness'], 'effective' => ep.thickness.round(3) },
+            'material' => { 'auto' => ap.material_id, 'value' => ov['material'], 'effective' => ep.material_id },
+            'edges' => { 'auto' => strs.call(ap.edges), 'value' => ov['edges'], 'effective' => strs.call(ep.edges) }
+          }
+          Overrides::OFFSET_FIELDS.each { |f| fields[f] = { 'auto' => 0.0, 'value' => ov[f], 'effective' => ov[f] || 0.0 } }
+          { 'key' => ap.key, 'part_id' => cab.part_id(ap), 'name' => ap.name, 'status' => ep.status, 'fields' => fields,
+            'edge_faces' => Panel::FACES.select { |_, (axis, _)| axis != ap.thickness_axis }.keys.map(&:to_s) }
+        end
+        { 'ok' => true, 'cabinet' => cab.summary, 'parts' => rows, 'orphans' => cab.orphan_overrides,
+          'materials' => Material.all.map { |m| { 'id' => m.id, 'name' => m.name } },
+          'issues' => Validation::Validator.check_cabinet(cab).select { |i| i['part_key'] || i['code'] == 'override_orphan' } }
       end
 
       # --- Reports: derived from every cabinet in the model, never stored ---------------

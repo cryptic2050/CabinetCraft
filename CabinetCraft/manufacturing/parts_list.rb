@@ -8,7 +8,7 @@ module CabinetCraft
       COLUMNS = [
         ['part_id', 'Part ID'], ['cabinet_label', 'Cabinet'], ['name', 'Part name'], ['length', 'Length'],
         ['width', 'Width'], ['thickness', 'Thickness'], ['qty', 'Qty'], ['material', 'Material'],
-        ['grain', 'Grain'], ['edge_text', 'Edge banding'], ['hardware', 'Hardware']
+        ['grain', 'Grain'], ['edge_text', 'Edge banding'], ['hardware', 'Hardware'], ['status', 'Status']
       ].freeze
 
       module_function

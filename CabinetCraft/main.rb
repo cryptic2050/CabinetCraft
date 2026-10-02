@@ -3,7 +3,7 @@
 require 'sketchup.rb'
 
 %w[
-  core/units core/material core/material_config core/construction core/hardware core/parameter core/rules core/edge_banding core/panel
+  core/units core/material core/material_config core/construction core/hardware core/parameter core/rules core/edge_banding core/panel core/overrides
   core/hardware_rules core/cabinet core/library
   generators/panel_generator generators/cabinet_generator
   manufacturing/parts_list manufacturing/cutting_list manufacturing/cut_sequence manufacturing/nesting manufacturing/labels

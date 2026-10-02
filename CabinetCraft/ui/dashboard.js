@@ -42,7 +42,7 @@
     type: 'base_cabinet', params: null, editing: null, preview: null, cabinets: [], search: '', timer: null, busy: false,
     partsMode: 'project', projectRows: null, partsSearch: '', partsCabinet: '', partsMaterial: '', sort: { key: 'part_id', dir: 1 },
     cutting: null, hw: null,
-    mats: null, matSel: null, cnc: null, cncCheck: null, cncPrev: null, cncFace: 'a', cncMat: '', cncSheet: 0, nest: null, nestMat: 0, nestSheet: 0, nestSel: null, health: null, labels: null, lookup: null
+    mats: null, matSel: null, adv: null, advOpen: false, cnc: null, cncCheck: null, cncPrev: null, cncFace: 'a', cncMat: '', cncSheet: 0, nest: null, nestMat: 0, nestSheet: 0, nestSel: null, health: null, labels: null, lookup: null
   };
   function load(k, d) { try { return localStorage.getItem(k) || d; } catch (e) { return d; } }
   function save(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* storage may be blocked */ } }
@@ -76,13 +76,62 @@
     S.timer = setTimeout(() => (S.editing ? applyUpdate() : runPreview()), 200);
   }
   function runPreview() {
-    return rpc('preview', [S.type, S.params, S.editing ? S.editing.label : null]).then((p) => { S.preview = p; paintResults(); }).catch(showError);
+    return rpc('preview', [S.type, S.params, S.editing ? S.editing.label : null, S.editing ? S.editing.id : null]).then((p) => { S.preview = p; paintResults(); }).catch(showError);
   }
-  function applyUpdate() {
-    return rpc('update', [S.editing.id, S.params]).then((p) => {
-      S.preview = p; if (p.cabinet) S.editing = p.cabinet; paintResults();
+  function applyUpdate(mode) {
+    return rpc('update', [S.editing.id, S.params, mode || null]).then((p) => {
+      if (p.needs_confirmation) { S.preview = p; showOverrideWarning(p.affected); paintResults(); return; }
+      clearOverrideWarning(); S.preview = p; if (p.cabinet) S.editing = p.cabinet; paintResults(); if (S.advOpen && p.updated) loadAdvanced();
     }).catch(showError);
   }
+  function clearOverrideWarning() { const el = $('#ovr_warn'); if (el) el.innerHTML = ''; }
+  function showOverrideWarning(list) {
+    const el = $('#ovr_warn'); if (!el) return;
+    const lines = list.map((a) => a.orphaned ? `<li><b>${esc(a.part_id)}</b> has a manual override but would no longer exist.</li>`
+      : `<li><b>${esc(a.part_id)}</b> ${esc(a.field)} is manually set to <b>${fmt(a.override)}</b>; the automatic value would change ${fmt(a.auto_old)} &rarr; ${fmt(a.auto_new)} ${S.unit}.</li>`).join('');
+    el.innerHTML = `<div class="card" style="border-color:var(--warn)"><h3>This change affects manual overrides</h3><ul style="margin:6px 0 10px 16px;padding:0">${lines}</ul>
+      <div class="row"><button class="primary" id="ow_keep">Keep my overrides</button><button class="ghost" id="ow_reset">Reset them to AUTO</button><button class="ghost" id="ow_cancel">Cancel the change</button></div>
+      <p class="mute" style="margin-top:8px">Nothing has been changed in the model yet.</p></div>`;
+    $('#ow_keep').onclick = () => applyUpdate('keep');
+    $('#ow_reset').onclick = () => applyUpdate('reset');
+    $('#ow_cancel').onclick = () => { S.params = Object.assign({}, S.editing.params); clearOverrideWarning(); render(); runPreview(); };
+  }
+  // ---- Advanced parts (manual overrides) -------------------------------------------------------
+  function loadAdvanced() { if (!S.editing) return; rpc('advanced_parts', [S.editing.id]).then((a) => { S.adv = a; paintAdvanced(); }).catch(showError); }
+  function paintAdvanced() {
+    const el = $('#advbody'); if (!el || !S.adv) return; const a = S.adv;
+    const num = (f) => (f.value == null ? '' : toDisp(f.value));
+    const card = (p) => {
+      const f = p.fields; const manual = p.status !== 'AUTO'; const ed = f.edges.value;
+      const inp = (k, label, unit) => `<div class="field"><label>${label}</label><input type="number" step="any" data-ov="${k}" placeholder="${toDisp(f[k].auto)}" value="${num(f[k])}"></div>`;
+      const off = (k, label) => `<div class="field"><label>${label}</label><input type="number" step="any" data-ov="${k}" placeholder="0" value="${f[k].value == null ? '' : toDisp(f[k].value)}"></div>`;
+      const edgeCells = p.edge_faces.map((face) => `<div class="field"><label>${face}</label><input type="number" step="any" min="0" max="5" data-edge="${face}" ${ed ? '' : 'disabled'} value="${(ed ? (ed[face] || 0) : (f.edges.auto[face] || 0))}"></div>`).join('');
+      return `<details class="partcard" data-key="${esc(p.key)}" ${manual ? 'open' : ''}><summary>${esc(p.name)} <span class="mono mute">${esc(p.part_id)}</span> <span class="badge ${manual ? 'warnb' : 'plan'}">${p.status}</span></summary>
+        <div class="fields">${inp('length', `Length (${S.unit})`)}${inp('width', `Width (${S.unit})`)}${inp('thickness', `Thickness (${S.unit})`)}
+        <div class="field"><label>Material</label><select data-ov="material"><option value="">Auto (${esc((a.materials.find((m) => m.id === f.material.auto) || {}).name || f.material.auto)})</option>${a.materials.map((m) => `<option value="${esc(m.id)}" ${m.id === f.material.value ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</select></div>
+        ${off('offset_x', `Move X (${S.unit})`)}${off('offset_y', `Move Y (${S.unit})`)}${off('offset_z', `Move Z (${S.unit})`)}</div>
+        <div class="field" style="padding:0 12px"><label><input type="checkbox" data-edges-on ${ed ? 'checked' : ''}> Override edge banding (mm per edge; 0 = none)</label></div>
+        <div class="fields" style="grid-template-columns:repeat(4,1fr)">${edgeCells}</div>
+        <div class="row" style="padding:0 12px 12px"><button class="primary" data-apply>Apply</button><button class="ghost" data-reset ${manual ? '' : 'disabled'}>Reset to AUTO</button><span class="mute">Blank = AUTO (grey = automatic value)</span></div></details>`;
+    };
+    el.innerHTML = `${a.orphans.length ? `<ul class="issues"><li class="warning"><b>IGNORED</b> overrides for parts that no longer exist: ${esc(a.orphans.join(', '))}</li></ul>` : ''}
+      ${a.issues.length ? `<ul class="issues">${a.issues.map((i) => `<li class="${i.severity}">${esc(i.message)}</li>`).join('')}</ul>` : ''}
+      <div class="row" style="margin-bottom:8px"><span class="mute">${a.parts.filter((p) => p.status !== 'AUTO').length} of ${a.parts.length} parts manually overridden</span><button class="ghost" id="adv_resetall">Reset all to AUTO</button></div>
+      ${a.parts.map(card).join('')}<p class="mute">Overrides stay when you change the cabinet's size; you are asked before a change would alter one. Hardware counts, labels, nesting and machining follow the overridden parts. Dimensions are along the part's own length/width/thickness axes.</p>`;
+    el.querySelectorAll('details.partcard').forEach((d) => {
+      const key = d.dataset.key;
+      d.querySelector('[data-edges-on]').onchange = (e) => d.querySelectorAll('[data-edge]').forEach((i) => (i.disabled = !e.target.checked));
+      d.querySelector('[data-apply]').onclick = () => {
+        const fields = {};
+        d.querySelectorAll('[data-ov]').forEach((i) => { const k = i.dataset.ov; fields[k] = i.value === '' ? '' : (k === 'material' ? i.value : fromDisp(i.value)); });
+        if (d.querySelector('[data-edges-on]').checked) { const e = {}; d.querySelectorAll('[data-edge]').forEach((i) => (e[i.dataset.edge] = i.value === '' ? 0 : parseFloat(i.value))); fields.edges = e; } else fields.edges = null;
+        rpc('set_override', [S.editing.id, key, fields]).then((r) => { S.adv = r; S.editing = r.cabinet; paintAdvanced(); runPreview(); toast('Saved'); }).catch(showError);
+      };
+      d.querySelector('[data-reset]').onclick = () => rpc('reset_overrides', [S.editing.id, key]).then((r) => { S.adv = r; S.editing = r.cabinet; paintAdvanced(); runPreview(); toast('Reset to AUTO'); }).catch(showError);
+    });
+    $('#adv_resetall').onclick = () => rpc('reset_overrides', [S.editing.id]).then((r) => { S.adv = r; S.editing = r.cabinet; paintAdvanced(); runPreview(); toast('All parts reset to AUTO'); }).catch(showError);
+  }
+
   function doCreate() {
     S.busy = true; render();
     rpc('create', [S.type, S.params]).then((p) => {
@@ -154,7 +203,8 @@
       ? `<span class="mute">Changes apply to the model as you type.</span> <button class="ghost" id="newcab">New cabinet</button>`
       : `<button class="primary" id="create" ${S.busy ? 'disabled' : ''}>CREATE</button>`;
     return `<h2>${title}</h2><div class="row" style="margin-bottom:10px">${action}</div>
-      <div id="issues"></div>${body}<h2>CALCULATED</h2><div id="calc"></div>`;
+      <div id="ovr_warn"></div><div id="issues"></div>${body}<h2>CALCULATED</h2><div id="calc"></div>
+      ${S.editing ? `<h2>ADVANCED PARTS</h2><details id="adv" ${S.advOpen ? 'open' : ''}><summary>MANUAL OVERRIDES (AUTO unless changed)</summary><div id="advbody" style="padding:10px 12px"><p class="mute">Loading...</p></div></details>` : ''}`;
   }
   function fieldHtml(f) {
     const v = S.params[f.key]; const id = 'f_' + f.key;
@@ -178,6 +228,7 @@
         schedule();
       };
     });
+    const adv = $('#adv'); if (adv) { adv.ontoggle = () => { S.advOpen = adv.open; if (adv.open) loadAdvanced(); }; if (adv.open) loadAdvanced(); }
     const c = $('#create'); if (c) c.onclick = doCreate;
     const n = $('#newcab'); if (n) n.onclick = () => { S.editing = null; S.preview = null; S.params = Object.assign({}, S.boot.defaults[S.type]); render(); runPreview(); };
   }
@@ -213,7 +264,7 @@
 
   // ---- Parts (project-wide) -------------------------------------------------
   const PART_COLS = [['part_id', 'PART ID'], ['cabinet_label', 'CABINET'], ['name', 'PART'], ['length', 'LENGTH', 1], ['width', 'WIDTH', 1],
-    ['thickness', 'THK', 1], ['qty', 'QTY', 1], ['material', 'MATERIAL'], ['grain', 'GRAIN'], ['edge_text', 'EDGE BANDING'], ['hardware', 'HARDWARE']];
+    ['thickness', 'THK', 1], ['qty', 'QTY', 1], ['material', 'MATERIAL'], ['grain', 'GRAIN'], ['edge_text', 'EDGE BANDING'], ['hardware', 'HARDWARE'], ['status', 'STATUS']];
 
   function partsShell() {
     return `<h2>PARTS</h2><div class="row" style="margin-bottom:8px">
@@ -248,7 +299,7 @@
     rows = rows.slice().sort((a, b) => (a[key] < b[key] ? -dir : a[key] > b[key] ? dir : 0));
     if (!all.length) { t.innerHTML = '<div class="card"><h3>No parts</h3><p>Create a cabinet, or configure one in PARAMETERS.</p></div>'; $('#pexport').innerHTML = ''; return; }
     t.innerHTML = `<div class="card" style="overflow:auto"><table><thead><tr>${PART_COLS.map(([k, h]) => `<th class="sortable" data-sort="${k}">${h}${key === k ? (dir > 0 ? ' &#9650;' : ' &#9660;') : ''}</th>`).join('')}</tr></thead><tbody>
-      ${rows.map((r) => `<tr>${PART_COLS.map(([k, , num]) => `<td class="${num ? 'num' : ''}">${num && k !== 'qty' ? fmt(r[k]) : k === 'grain' ? GRAIN[r[k]] : esc(r[k])}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
+      ${rows.map((r) => `<tr>${PART_COLS.map(([k, , num]) => `<td class="${num ? 'num' : ''}">${num && k !== 'qty' ? fmt(r[k]) : k === 'grain' ? GRAIN[r[k]] : k === 'status' ? `<span class="badge ${r[k] === 'AUTO' ? 'plan' : 'warnb'}">${esc(r[k])}</span>` : esc(r[k])}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
       <p class="mute">${rows.length} of ${all.length} parts. Dimensions in ${S.unit}; length is the longer side and band thickness is not deducted.</p>`;
     t.querySelectorAll('[data-sort]').forEach((th) => (th.onclick = () => { S.sort = { key: th.dataset.sort, dir: S.sort.key === th.dataset.sort ? -S.sort.dir : 1 }; paintParts(); }));
     $('#pexport').innerHTML = S.partsMode === 'project' ? exportButtons('parts') : '<p class="mute">Exports cover all cabinets in the model: switch to "All cabinets".</p>';

@@ -25,10 +25,10 @@ module CabinetCraft
     }.freeze
 
     attr_reader :key, :name, :role, :origin, :size, :thickness_axis, :grain_axis,
-                :material_id, :material_label, :grooved_into, :edges
+                :material_id, :material_label, :grooved_into, :edges, :overridden
 
     def initialize(key:, name:, role:, origin:, size:, thickness_axis:, material_id:, material_label:,
-                   grain_axis: nil, grooved_into: [], edges: {})
+                   grain_axis: nil, grooved_into: [], edges: {}, overridden: [])
       @key = key
       @name = name
       @role = role
@@ -40,12 +40,23 @@ module CabinetCraft
       @material_label = material_label
       @grooved_into = grooved_into.freeze # keys of panels this one is housed in (allowed to overlap)
       @edges = validate_edges(edges).freeze # { face name => band thickness mm }
+      @overridden = overridden.freeze       # names of manually overridden fields (empty = AUTO)
+    end
+
+    def status
+      overridden.empty? ? 'AUTO' : 'MANUAL OVERRIDE'
+    end
+
+    # Copy with some attributes replaced; nil keeps the current value (an empty edges hash is a real value).
+    def with(size: nil, origin: nil, material: nil, edges: nil, overridden: nil)
+      self.class.new(key: key, name: name, role: role, origin: origin || self.origin, size: size || self.size, thickness_axis: thickness_axis,
+                     material_id: material ? material.id : material_id, material_label: material ? material.name : material_label,
+                     grain_axis: grain_axis, grooved_into: grooved_into, edges: edges.nil? ? self.edges : edges,
+                     overridden: overridden.nil? ? self.overridden : overridden)
     end
 
     def with_edges(new_edges)
-      self.class.new(key: key, name: name, role: role, origin: origin, size: size, thickness_axis: thickness_axis,
-                     material_id: material_id, material_label: material_label, grain_axis: grain_axis,
-                     grooved_into: grooved_into, edges: new_edges)
+      with(edges: new_edges)
     end
 
     # Name shared by identical parts, e.g. 'drawer_2_side_left' -> 'Drawer side'.
@@ -158,6 +169,7 @@ module CabinetCraft
         'edge_codes' => edge_codes,
         'edge_text' => edge_text,
         'position' => assembly_position,
+        'status' => status,
         'qty' => 1
       }
     end

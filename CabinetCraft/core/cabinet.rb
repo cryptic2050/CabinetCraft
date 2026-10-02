@@ -7,6 +7,7 @@ require_relative 'parameter'
 require_relative 'rules'
 require_relative 'material'
 require_relative 'hardware_rules'
+require_relative 'overrides'
 require_relative '../generators/panel_generator'
 
 module CabinetCraft
@@ -15,7 +16,7 @@ module CabinetCraft
   class Cabinet
     SCHEMA_VERSION = 1
 
-    attr_reader :id, :label, :type, :params, :created_at, :modified_at, :version
+    attr_reader :id, :label, :type, :params, :created_at, :modified_at, :version, :overrides
 
     def self.build(type:, params:, label:)
       now = Time.now.utc.iso8601
@@ -23,7 +24,8 @@ module CabinetCraft
           created_at: now, modified_at: now, version: 1)
     end
 
-    def initialize(id:, label:, type:, params:, created_at:, modified_at:, version:)
+    def initialize(id:, label:, type:, params:, created_at:, modified_at:, version:, overrides: {})
+      @overrides = overrides.freeze # { part_key => { field => value } }, see Overrides
       @id = id
       @label = label
       @type = type
@@ -37,8 +39,20 @@ module CabinetCraft
       @calculation ||= Rules.compute(params)
     end
 
+    # Automatically calculated panels (no manual overrides).
+    def auto_panels
+      @auto_panels ||= calculation.ok? ? Generators::PanelGenerator.generate(params, calculation.values) : []
+    end
+
+    # The production panels: automatic ones with manual overrides applied. Everything downstream uses these.
     def panels
-      @panels ||= calculation.ok? ? Generators::PanelGenerator.generate(params, calculation.values) : []
+      @panels ||= Overrides.apply(auto_panels, overrides)
+    end
+
+    # Overrides whose part no longer exists (e.g. a door that was removed).
+    def orphan_overrides
+      keys = auto_panels.map(&:key)
+      overrides.keys - keys
     end
 
     def part_id(panel)
@@ -76,15 +90,20 @@ module CabinetCraft
       hardware.map { |h| h.merge('cabinet_id' => id, 'cabinet_label' => label) }
     end
 
-    # Same identity, new parameters, bumped version.
-    def with_params(new_params)
-      self.class.new(id: id, label: label, type: type, params: new_params,
-                     created_at: created_at, modified_at: Time.now.utc.iso8601, version: version + 1)
+    # Same identity, new parameters (overrides are kept unless replaced), bumped version.
+    def with_params(new_params, overrides: nil)
+      self.class.new(id: id, label: label, type: type, params: new_params, created_at: created_at,
+                     modified_at: Time.now.utc.iso8601, version: version + 1, overrides: overrides || self.overrides)
+    end
+
+    def with_overrides(new_overrides)
+      self.class.new(id: id, label: label, type: type, params: params, created_at: created_at,
+                     modified_at: Time.now.utc.iso8601, version: version + 1, overrides: new_overrides)
     end
 
     def with_identity(id:, label:)
-      self.class.new(id: id, label: label, type: type, params: params,
-                     created_at: created_at, modified_at: modified_at, version: version)
+      self.class.new(id: id, label: label, type: type, params: params, created_at: created_at,
+                     modified_at: modified_at, version: version, overrides: overrides)
     end
 
     # Flat attribute set stored in the SketchUp attribute dictionary. `params_json`
@@ -109,6 +128,7 @@ module CabinetCraft
         'created_date' => created_at,
         'modified_date' => modified_at,
         'version' => version,
+        'overrides_json' => JSON.generate(overrides),
         'params_json' => JSON.generate(params)
       }
     end
@@ -122,13 +142,13 @@ module CabinetCraft
 
       new(id: attrs['cabinet_id'], label: attrs['cabinet_label'].to_s, type: attrs['cabinet_type'].to_s,
           params: params, created_at: attrs['created_date'].to_s, modified_at: attrs['modified_date'].to_s,
-          version: attrs['version'].to_i)
+          version: attrs['version'].to_i, overrides: Overrides.sanitize(attrs['overrides_json'] ? JSON.parse(attrs['overrides_json']) : {}))
     rescue JSON::ParserError, KeyError
       nil
     end
 
     def summary
-      { 'id' => id, 'label' => label, 'type' => type, 'params' => params,
+      { 'id' => id, 'label' => label, 'type' => type, 'params' => params, 'overrides' => overrides,
         'version' => version, 'modified_at' => modified_at }
     end
   end

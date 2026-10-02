@@ -167,8 +167,8 @@ module CabinetCraft
 
       # --- drawer runners ------------------------------------------------------------------------------
       def runners(ctx)
-        boxes = ctx[:v]['drawer_boxes']
-        return if boxes.empty?
+        fronts = ctx[:cab].panels.select { |p| p.role == :drawer_front }.sort_by(&:key)
+        return if fronts.empty?
 
         rid = ctx[:params]['runner_type']
         unless rid == 'runner_side_mount'
@@ -178,8 +178,9 @@ module CabinetCraft
         st = ctx[:st]
         l = ctx[:panels]['side_left']
         r = ctx[:panels]['side_right']
-        boxes.each do |b|
-          z = b['z'] + b['height'] / 2.0
+        fronts.each_index do |i|
+          box_side = ctx[:panels]["drawer_#{i + 1}_side_left"] or next
+          z = (box_side.origin[2] + box_side.max_corner[2]) / 2.0
           st['runner_hole_count'].times do |k|
             y = l.origin[1] + st['runner_front_hole'] + k * st['runner_hole_pitch']
             face_op(ctx, l, 'a', [l.max_corner[0], y, z], st['runner_dia'], st['runner_depth'], 'runner', rid)
@@ -208,7 +209,7 @@ module CabinetCraft
           bottom = panels['bottom']
           left = k == 'side_left'
           zj = bottom.max_corner[2]
-          positions.call(v['side_depth']).each do |d|
+          positions.call(side.size[1]).each do |d|
             y = side.origin[1] + d
             xc = side.origin[0] + t / 2.0
             joint(ctx, type, edge: [side, :bottom, [xc, y, zj]], cam: [side, left ? 'a' : 'b', [left ? side.max_corner[0] : side.min_corner[0], y, zj + st['cam_distance']]],
@@ -217,7 +218,7 @@ module CabinetCraft
         end
         %w[brace_front brace_rear zone_shelf].each do |k|
           pn = panels[k] or next
-          len = k == 'zone_shelf' ? v['back_y'] : v['brace_depth']
+          len = pn.size[1]
           zc = pn.origin[2] + pn.thickness / 2.0
           [[:left, 'side_left', 'a'], [:right, 'side_right', 'b']].each do |dir, sk, fside|
             sd = panels[sk]
@@ -232,7 +233,7 @@ module CabinetCraft
         ctx[:cab].panels.select { |p| p.role == :divider }.each do |dv|
           bottom = panels['bottom']
           zj = bottom.max_corner[2]
-          positions.call(v['divider_depth']).each do |d|
+          positions.call(dv.size[1]).each do |d|
             y = dv.origin[1] + d
             xc = dv.origin[0] + t / 2.0
             joint(ctx, type, edge: [dv, :bottom, [xc, y, zj]], cam: [dv, 'a', [dv.max_corner[0], y, zj + st['cam_distance']]], face: [bottom, 'a', [xc, y, zj]])

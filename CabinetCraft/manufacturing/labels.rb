@@ -32,7 +32,7 @@ module CabinetCraft
               'project' => project_name, 'cabinet' => cab.label, 'part' => r['name'], 'part_id' => r['part_id'],
               'dimensions' => "#{fmt(r['length'])} x #{fmt(r['width'])} x #{fmt(r['thickness'])}", 'material' => r['material'],
               'qty' => r['qty'], 'grain' => GRAIN_TEXT.fetch(r['grain'], r['grain']), 'edge_banding' => r['edge_text'],
-              'position' => r['position'], 'qr_payload' => code, 'qr_svg' => qr ? QrCode.svg(code, quiet: 1) : nil
+              'position' => r['position'], 'override' => r['status'] == 'AUTO' ? '' : r['status'], 'qr_payload' => code, 'qr_svg' => qr ? QrCode.svg(code, quiet: 1) : nil
             }
           end
         end

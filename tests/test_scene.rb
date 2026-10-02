@@ -208,7 +208,7 @@ class TestSceneReports < Minitest::Test
       csv = File.join(dir, 'p.csv')
       assert @c.export('parts', 'csv', csv)['ok']
       lines = File.read(csv).lines
-      assert_equal 'Part ID,Cabinet,Part name,Length,Width,Thickness,Qty,Material,Grain,Edge banding,Hardware', lines[0].chomp
+      assert_equal 'Part ID,Cabinet,Part name,Length,Width,Thickness,Qty,Material,Grain,Edge banding,Hardware,Status', lines[0].chomp
       assert_equal @c.parts_list['rows'].size + 1, lines.size
       xl = File.join(dir, 'p_excel.csv')
       @c.export('cutting_list', 'excel_csv', xl)
@@ -625,5 +625,149 @@ class TestSceneMaterials < Minitest::Test
   def test_invalid_material_input_changes_nothing
     assert_raises(ArgumentError) { @c.save_material(custom('thickness' => 0)) }
     assert_empty CabinetCraft::Material.config.custom
+  end
+end
+
+class TestSceneOverrides < Minitest::Test
+  def setup
+    Sketchup.reset_model!
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    CabinetCraft::Material.config = CabinetCraft::MaterialConfig.new
+    @c = CabinetCraft::Interface::Controller.new
+    @model = Sketchup.active_model
+    @cab = @c.create('base_cabinet', 'door_count' => 0)['cabinet']
+  end
+
+  def groups
+    @model.entities.grep(Sketchup::Group)
+  end
+
+  def part_group(name)
+    groups.first.entities.grep(Sketchup::Group).find { |g| g.name == name }
+  end
+
+  def extent_mm(group)
+    b = group.bounds
+    [b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z].map { |v| (v * 25.4).round(3) }
+  end
+
+  def rows
+    @c.parts_list['rows']
+  end
+
+  def test_set_override_regenerates_the_geometry_and_marks_the_part
+    assert_equal [18.0, 562.0, 739.0], extent_mm(part_group('B01-SIDE_LEFT'))
+    state = @c.set_override(@cab['id'], 'side_left', 'length' => 700, 'width' => 500)
+    assert_equal [18.0, 500.0, 700.0], extent_mm(part_group('B01-SIDE_LEFT'))
+    assert_equal [18.0, 562.0, 739.0], extent_mm(part_group('B01-SIDE_RIGHT'))
+    part = state['parts'].find { |p| p['key'] == 'side_left' }
+    assert_equal 'MANUAL OVERRIDE', part['status']
+    assert_equal({ 'auto' => 739.0, 'value' => 700.0, 'effective' => 700.0 }, part['fields']['length'])
+    assert_equal 'AUTO', state['parts'].find { |p| p['key'] == 'side_right' }['status']
+    assert_equal 'MANUAL OVERRIDE', rows.find { |r| r['key'] == 'side_left' }['status']
+    JSON.generate(state)
+  end
+
+  def test_overrides_are_stored_in_the_model_and_survive_reload
+    @c.set_override(@cab['id'], 'shelf_1', 'offset_z' => 20)
+    fresh = CabinetCraft::Interface::Controller.new
+    assert_equal({ 'shelf_1' => { 'offset_z' => 20.0 } }, fresh.list['cabinets'].first['overrides'])
+    assert_equal 'MANUAL OVERRIDE', fresh.parts_list['rows'].find { |r| r['key'] == 'shelf_1' }['status']
+  end
+
+  def test_blank_value_and_reset_return_to_auto
+    @c.set_override(@cab['id'], 'side_left', 'length' => 700, 'offset_x' => 3)
+    @c.set_override(@cab['id'], 'side_left', 'length' => '')
+    assert_equal({ 'side_left' => { 'offset_x' => 3.0 } }, @c.list['cabinets'].first['overrides'])
+    ops = @model.ops.size
+    @c.set_override(@cab['id'], 'side_left', 'length' => '') # no change: no model operation
+    assert_equal ops, @model.ops.size
+    @c.set_override(@cab['id'], 'bottom', 'thickness' => 20)
+    st = @c.reset_overrides(@cab['id'], 'side_left')
+    assert_equal ['bottom'], st['parts'].select { |p| p['status'] != 'AUTO' }.map { |p| p['key'] }
+    assert_empty @c.reset_overrides(@cab['id'])['parts'].select { |p| p['status'] != 'AUTO' }
+    assert_equal [18.0, 562.0, 739.0], extent_mm(part_group('B01-SIDE_LEFT'))
+  end
+
+  def test_invalid_overrides_are_rejected_and_change_nothing
+    ops = @model.ops.size
+    assert_raises(ArgumentError) { @c.set_override(@cab['id'], 'side_left', 'length' => -5) }
+    assert_raises(ArgumentError) { @c.set_override(@cab['id'], 'nope', 'length' => 5) }
+    assert_raises(ArgumentError) { @c.set_override(@cab['id'], 'side_left', 'edges' => { 'left' => 1 }) }
+    assert_raises(ArgumentError) { @c.set_override('missing', 'side_left', 'length' => 5) }
+    assert_equal ops, @model.ops.size
+    assert_empty @c.list['cabinets'].first['overrides']
+  end
+
+  def test_editing_a_cabinet_that_would_change_an_override_asks_first
+    @c.set_override(@cab['id'], 'side_left', 'length' => 700)
+    ops = @model.ops.size
+    res = @c.update(@cab['id'], @cab['params'].merge('height' => 900))
+    refute res['updated']
+    assert res['needs_confirmation']
+    assert_equal [['side_left', 'length', 700.0, 739.0, 882.0]], res['affected'].map { |a| a.values_at('part_key', 'field', 'override', 'auto_old', 'auto_new') }
+    assert_equal 'B01-SIDE_LEFT', res['affected'].first['part_id']
+    assert_equal ops, @model.ops.size, 'nothing was changed while waiting for the decision'
+    assert_equal 757.0, @c.list['cabinets'].first['params']['height']
+  end
+
+  def test_keep_applies_the_change_and_keeps_the_override
+    @c.set_override(@cab['id'], 'side_left', 'length' => 700)
+    res = @c.update(@cab['id'], @cab['params'].merge('height' => 900), 'keep')
+    assert res['updated']
+    assert_equal({ 'side_left' => { 'length' => 700.0 } }, res['cabinet']['overrides'])
+    assert_equal [18.0, 562.0, 700.0], extent_mm(part_group('B01-SIDE_LEFT')) # still the manual value
+    assert_equal [18.0, 562.0, 882.0], extent_mm(part_group('B01-SIDE_RIGHT')) # others follow the new height
+  end
+
+  def test_reset_applies_the_change_and_returns_affected_parts_to_auto
+    @c.set_override(@cab['id'], 'side_left', 'length' => 700)
+    @c.set_override(@cab['id'], 'shelf_1', 'offset_z' => 10)
+    res = @c.update(@cab['id'], @cab['params'].merge('height' => 900), 'reset')
+    assert res['updated']
+    assert_equal({ 'shelf_1' => { 'offset_z' => 10.0 } }, res['cabinet']['overrides']) # unaffected override stays
+    assert_equal [18.0, 562.0, 882.0], extent_mm(part_group('B01-SIDE_LEFT'))
+  end
+
+  def test_changes_that_do_not_touch_overridden_sizes_need_no_confirmation
+    @c.set_override(@cab['id'], 'side_left', 'length' => 700)
+    res = @c.update(@cab['id'], @cab['params'].merge('width' => 700, 'shelf_count' => 2)) # side length depends only on height
+    assert res['updated']
+    refute res['needs_confirmation']
+    assert_equal [18.0, 562.0, 700.0], extent_mm(part_group('B01-SIDE_LEFT'))
+  end
+
+  def test_removing_an_overridden_part_asks_and_orphans_are_reported
+    c2 = @c.create('base_cabinet', 'width' => 800, 'door_count' => 2)['cabinet']
+    @c.set_override(c2['id'], 'door_2', 'length' => 600)
+    res = @c.update(c2['id'], c2['params'].merge('door_count' => 1))
+    assert res['needs_confirmation']
+    assert_equal [true], res['affected'].map { |a| a['orphaned'] }
+    kept = @c.update(c2['id'], c2['params'].merge('door_count' => 1), 'keep')
+    assert kept['updated']
+    assert_equal ['door_2'], @c.advanced_parts(c2['id'])['orphans']
+    assert(@c.validate['issues'].any? { |i| i['code'] == 'override_orphan' })
+  end
+
+  def test_overridden_geometry_is_not_flagged_as_hand_edited
+    @c.set_override(@cab['id'], 'side_left', 'length' => 700)
+    v = @c.validate
+    refute(v['issues'].any? { |i| i['code'] == 'geometry_modified' }, v['issues'].inspect)
+  end
+
+  def test_other_cabinets_are_untouched_by_overrides
+    other = @c.create('base_cabinet', 'door_count' => 0)['cabinet']
+    g2 = groups.last
+    @c.set_override(@cab['id'], 'side_left', 'length' => 700)
+    assert_equal 0, g2.made_unique
+    assert_empty @c.list['cabinets'].find { |c| c['id'] == other['id'] }['overrides']
+  end
+
+  def test_advanced_parts_shape
+    st = @c.advanced_parts(@cab['id'])
+    side = st['parts'].find { |p| p['key'] == 'side_left' }
+    assert_equal %w[bottom front top back].sort, side['edge_faces'].sort # a side's edges are not on its left/right faces
+    assert_equal %w[length width thickness material edges offset_x offset_y offset_z].sort, side['fields'].keys.sort
+    refute @c.advanced_parts('nope')['ok']
   end
 end
