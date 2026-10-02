@@ -51,6 +51,15 @@ module CabinetCraft
         @model.set_attribute(DICT, 'materials_snapshot', JSON.generate(hash))
       end
 
+      # User templates / presets used by this model, so it opens correctly on another machine.
+      def templates_snapshot
+        read_json('templates_snapshot')
+      end
+
+      def templates_snapshot=(hash)
+        @model.set_attribute(DICT, 'templates_snapshot', JSON.generate(hash))
+      end
+
       private
 
       def read_json(key)

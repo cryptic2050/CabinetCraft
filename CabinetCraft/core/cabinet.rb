@@ -8,6 +8,7 @@ require_relative 'rules'
 require_relative 'material'
 require_relative 'hardware_rules'
 require_relative 'overrides'
+require_relative 'library'
 require_relative '../generators/panel_generator'
 
 module CabinetCraft
@@ -35,13 +36,37 @@ module CabinetCraft
       @version = version
     end
 
+    # True for cabinets generated from a user template (see Templates), false for the built-in generator.
+    def custom?
+      Templates.template_type?(type)
+    end
+
+    def template
+      Templates.find(type)
+    end
+
+    def template_build
+      @template_build ||= template&.build(params)
+    end
+
     def calculation
-      @calculation ||= Rules.compute(params)
+      @calculation ||= if custom?
+                         template_build ? template_build.result : missing_template_result
+                       else
+                         Rules.compute(params)
+                       end
+    end
+
+    def missing_template_result
+      Rules::Result.new({}, [Rules::Issue.new(:error, nil, "The template '#{type}' is not available on this machine")])
     end
 
     # Automatically calculated panels (no manual overrides).
     def auto_panels
-      @auto_panels ||= calculation.ok? ? Generators::PanelGenerator.generate(params, calculation.values) : []
+      @auto_panels ||= if !calculation.ok? then []
+                       elsif custom? then template_build.panels
+                       else Generators::PanelGenerator.generate(params, calculation.values)
+                       end
     end
 
     # The production panels: automatic ones with manual overrides applied. Everything downstream uses these.
@@ -55,6 +80,15 @@ module CabinetCraft
       overrides.keys - keys
     end
 
+    # Panel keys the cabinet must have; used by validation to spot missing parts.
+    def expected_keys
+      return auto_panels.map(&:key) if custom?
+
+      v = calculation.values
+      %w[bottom side_left side_right back] + v['door_widths'].each_index.map { |i| "door_#{i + 1}" } +
+        v['drawer_fronts'].each_index.map { |i| "drawer_#{i + 1}_front" }
+    end
+
     def part_id(panel)
       "#{label}-#{panel.key.upcase}"
     end
@@ -63,13 +97,14 @@ module CabinetCraft
     # Not memoised: changing a hinge rule must show up immediately.
     def hardware
       return [] unless calculation.ok?
+      return template_build.hardware if custom?
 
       items, = HardwareRules.compute(params, calculation.values, panels)
       items
     end
 
     def hardware_issues
-      return [] unless calculation.ok?
+      return [] unless calculation.ok? && !custom? # a template's hardware warnings are part of its calculation issues
 
       _, issues = HardwareRules.compute(params, calculation.values, panels)
       issues
@@ -109,7 +144,7 @@ module CabinetCraft
     # Flat attribute set stored in the SketchUp attribute dictionary. `params_json`
     # is the authoritative copy; the flat fields exist for queries and other tools.
     def to_attributes
-      {
+      attrs = {
         'schema_version' => SCHEMA_VERSION,
         'cabinet_id' => id,
         'cabinet_label' => label,
@@ -123,22 +158,29 @@ module CabinetCraft
         'construction_type' => params['construction'],
         'shelf_count' => params['shelf_count'],
         'door_count' => params['door_count'],
-        'edge_banding' => "carcass=#{params['edge_carcass']};front=#{params['edge_front']}",
-        'hardware' => [params['hinge_type'], params['runner_type'], params['connector_type'], params['handle_type'], params['foot_type']].join(','),
+        'edge_banding' => custom? ? nil : "carcass=#{params['edge_carcass']};front=#{params['edge_front']}",
+        'hardware' => custom? ? hardware.map { |h| h['hardware_id'] }.uniq.join(',') : [params['hinge_type'], params['runner_type'], params['connector_type'], params['handle_type'], params['foot_type']].join(','),
         'created_date' => created_at,
         'modified_date' => modified_at,
         'version' => version,
         'overrides_json' => JSON.generate(overrides),
         'params_json' => JSON.generate(params)
       }
+      attrs.reject { |_, v| v.nil? } # custom templates need not have width / height / depth / materials
     end
 
     # Returns nil when the attributes are missing or unusable.
     def self.from_attributes(attrs)
       return nil unless attrs['cabinet_id'] && attrs['params_json']
 
-      params, errors = Parameter.coerce(JSON.parse(attrs['params_json']))
-      return nil unless errors.empty?
+      raw = JSON.parse(attrs['params_json'])
+      type = attrs['cabinet_type'].to_s
+      if Templates.template_type?(type) && Library.schema_for(type).nil?
+        params = raw # template not available here (yet): keep the data, the cabinet reports the problem
+      else
+        params, errors = Parameter.coerce(raw, Library.schema_for(type))
+        return nil unless errors.empty?
+      end
 
       new(id: attrs['cabinet_id'], label: attrs['cabinet_label'].to_s, type: attrs['cabinet_type'].to_s,
           params: params, created_at: attrs['created_date'].to_s, modified_at: attrs['modified_date'].to_s,

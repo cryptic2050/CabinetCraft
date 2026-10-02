@@ -72,11 +72,11 @@ module CabinetCraft
     # Returns [params, errors]. Unknown keys are dropped; missing keys take the
     # default. Every field that fails validation yields one error and the
     # caller must not generate geometry.
-    def coerce(raw)
+    def coerce(raw, fields = nil)
       raw = (raw || {}).transform_keys(&:to_s)
       params = {}
       errors = []
-      schema.each do |f|
+      (fields || schema).each do |f|
         key = f['key']
         value = raw.key?(key) ? raw[key] : f['default']
         begin

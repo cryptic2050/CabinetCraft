@@ -446,6 +446,7 @@ class TestSceneCnc < Minitest::Test
     Sketchup.reset_model!
     CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new(CabinetCraft::Scene::SettingsStore.new('hardware_config'))
     CabinetCraft::Material.config = CabinetCraft::MaterialConfig.new
+    CabinetCraft::Templates.config = CabinetCraft::Templates::Config.new
     CabinetCraft::MachiningConfig.current = CabinetCraft::MachiningConfig.new(CabinetCraft::Scene::SettingsStore.new('machining_config'))
     @c = CabinetCraft::Interface::Controller.new
     @c.create('base_double_door', 'handle_type' => 'handle_bar')
@@ -538,6 +539,7 @@ class TestSceneMaterials < Minitest::Test
     Sketchup.reset_model!
     CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
     CabinetCraft::Material.config = CabinetCraft::MaterialConfig.new
+    CabinetCraft::Templates.config = CabinetCraft::Templates::Config.new
     @c = CabinetCraft::Interface::Controller.new
     @model = Sketchup.active_model
   end
@@ -607,6 +609,7 @@ class TestSceneMaterials < Minitest::Test
     @c.create('base_cabinet', 'material' => mat)
     @model.set_attribute('CabinetCraft_Project', 'materials_snapshot', '{}')
     CabinetCraft::Material.config = CabinetCraft::MaterialConfig.new
+    CabinetCraft::Templates.config = CabinetCraft::Templates::Config.new
     v = @c.validate
     assert_equal ['missing_material'], v['issues'].map { |i| i['code'] }
     assert_empty @c.parts_list['rows']
@@ -634,6 +637,7 @@ class TestSceneOverrides < Minitest::Test
     Sketchup.reset_model!
     CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
     CabinetCraft::Material.config = CabinetCraft::MaterialConfig.new
+    CabinetCraft::Templates.config = CabinetCraft::Templates::Config.new
     @c = CabinetCraft::Interface::Controller.new
     @model = Sketchup.active_model
     @cab = @c.create('base_cabinet', 'door_count' => 0)['cabinet']
@@ -798,6 +802,7 @@ class TestScenePdf < Minitest::Test
     Sketchup.reset_model!
     CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
     CabinetCraft::Material.config = CabinetCraft::MaterialConfig.new
+    CabinetCraft::Templates.config = CabinetCraft::Templates::Config.new
     @c = CabinetCraft::Interface::Controller.new
     @c.create('base_double_door', 'handle_type' => 'handle_bar')
     @c.create('base_drawer_3', {})
@@ -846,5 +851,191 @@ class TestLoader < Minitest::Test
     out, st = Open3.capture2e('ruby', File.join(__dir__, 'tools', 'load_main.rb'))
     assert st.success?, out
     assert_match(/LOAD OK: \d+ files/, out)
+  end
+end
+
+class TestSceneTemplates < Minitest::Test
+  Ex = CabinetCraft::Templates::Examples
+
+  def setup
+    Sketchup.reset_model!
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    CabinetCraft::Material.config = CabinetCraft::MaterialConfig.new
+    CabinetCraft::Templates.config = CabinetCraft::Templates::Config.new
+    @c = CabinetCraft::Interface::Controller.new
+    @model = Sketchup.active_model
+  end
+
+  def groups
+    @model.entities.grep(Sketchup::Group)
+  end
+
+  def shelf_id
+    @shelf_id ||= @c.install_example('open_shelf_unit')['saved_id']
+  end
+
+  # --- library -----------------------------------------------------------------------------------------------------
+  def test_installed_template_appears_in_the_library_with_its_own_schema
+    id = shelf_id
+    lib = @c.library_state
+    entry = lib['library'].find { |e| e['type'] == id }
+    assert_equal ['Open shelf unit', 'CUSTOM', 'template'], entry.values_at('name', 'category', 'user')
+    assert_equal %w[width height depth board back shelves edge], lib['schemas'][id].map { |f| f['key'] }
+    assert_includes @c.bootstrap['library'].map { |e| e['type'] }, id
+    assert_equal 'tpl_1', id
+  end
+
+  def test_create_edit_and_report_a_custom_cabinet
+    id = shelf_id
+    res = @c.create(id, 'width' => 900, 'shelves' => 2)
+    assert res['created'], res.inspect
+    cab = res['cabinet']
+    group = groups.first
+    assert_equal %w[B01-BACK B01-BOTTOM B01-SHELF_1 B01-SHELF_2 B01-SIDE_LEFT B01-SIDE_RIGHT B01-TOP], group.entities.grep(Sketchup::Group).map(&:name).sort
+    b = group.bounds
+    assert_in_delta 900, (b.max.x - b.min.x) * 25.4, 1e-6
+    up = @c.update(cab['id'], cab['params'].merge('shelves' => 4, 'height' => 2000))
+    assert up['updated']
+    assert_equal 4 + 4 + 1, groups.first.entities.grep(Sketchup::Group).size
+    rows = @c.parts_list['rows']
+    assert_equal 9, rows.size
+    assert(rows.all? { |r| r['cabinet_label'] == 'B01' })
+    assert_equal 'Shelf 3', rows.find { |r| r['key'] == 'shelf_3' }['name']
+    JSON.generate(@c.preview(id, {}))
+  end
+
+  def test_custom_cabinets_flow_into_cutting_list_nesting_labels_and_pdfs
+    @c.create(shelf_id, {})
+    @c.create('base_single_door', {}) # mixed with a built-in cabinet
+    assert_equal 2, @c.cutting_list['cabinet_count']
+    nest = @c.nest('kerf' => 8)
+    placed = nest['materials'].sum { |m| m['sheets'].sum { |s| s['placements'].size } }
+    assert_equal @c.parts_list['rows'].size, placed
+    assert_equal @c.parts_list['rows'].size, @c.labels['labels'].size
+    Dir.mktmpdir do |dir|
+      %w[parts cutting_list labels nesting].each { |k| assert @c.export(k, 'pdf', File.join(dir, "#{k}.pdf"))['ok'] }
+    end
+    v = @c.validate
+    assert_equal [], v['issues'].select { |i| i['severity'] == 'error' }.map { |i| i['message'] }
+  end
+
+  def test_custom_cabinets_get_a_machining_notice_and_no_drilling
+    @c.create(shelf_id, {})
+    assert_equal 0, @c.machining_state['summary']['total']
+    note = @c.validate['issues'].find { |i| i['code'] == 'machining_unsupported' }
+    assert_match(/custom template/, note['message'])
+    assert_equal 'warning', note['severity']
+  end
+
+  def test_overrides_work_on_custom_cabinets
+    cab = @c.create(shelf_id, {})['cabinet']
+    @c.set_override(cab['id'], 'shelf_1', 'offset_z' => 20, 'length' => 700)
+    row = @c.parts_list['rows'].find { |r| r['key'] == 'shelf_1' }
+    assert_equal ['MANUAL OVERRIDE', 700.0], row.values_at('status', 'length')
+    res = @c.update(cab['id'], cab['params'].merge('width' => 1000))
+    assert res['needs_confirmation'], 'shelf length is affected by width'
+  end
+
+  def test_constraint_failures_block_creation_with_the_templates_message
+    res = @c.create(shelf_id, 'height' => 400, 'shelves' => 8)
+    refute res['created']
+    assert_match(/less than 100 mm apart/, res['issues'].first['message'])
+    assert_empty groups
+  end
+
+  # --- editing, validating, deleting -------------------------------------------------------------------------------------
+  def test_validate_template_previews_or_explains
+    ok = @c.validate_template(JSON.generate(Ex::FLOATING_TV_UNIT))
+    assert ok['ok']
+    assert_equal 7, ok['panels'].size
+    assert_equal %w[bay inner_w], ok['derived'].map { |d| d['name'] }.sort
+    bad = @c.validate_template(JSON.generate(Ex::OPEN_SHELF_UNIT.merge('panels' => [Ex::OPEN_SHELF_UNIT['panels'][0].merge('size' => ['board_t', 'depth', 'oops'])])))
+    refute bad['ok']
+    assert(bad['errors'].any? { |e| e.include?('panels[1].size[z]') && e.include?('oops') })
+    refute @c.validate_template('{nope')['ok']
+    assert_empty @c.templates_state['templates'], 'validating never saves'
+  end
+
+  def test_editing_a_template_regenerates_only_its_cabinets
+    id = shelf_id
+    @c.create(id, {})
+    @c.create('base_single_door', {})
+    other = groups.last
+    edited = JSON.parse(JSON.generate(Ex::OPEN_SHELF_UNIT))
+    edited['panels'].find { |p| p['key'] == 'back' }['name'] = 'Rear panel'
+    res = @c.save_template(JSON.generate(edited), id)
+    assert_equal id, res['saved_id']
+    assert_equal 'Rear panel', @c.parts_list['rows'].find { |r| r['key'] == 'back' }['name']
+    assert_equal 0, other.made_unique
+  end
+
+  def test_template_in_use_cannot_be_deleted
+    id = shelf_id
+    @c.create(id, {})
+    err = assert_raises(ArgumentError) { @c.delete_template(id) }
+    assert_match(/B01/, err.message)
+    @c.update(@c.list['cabinets'].first['id'], @c.list['cabinets'].first['params']) # no-op
+    groups.first.erase!
+    refute_includes @c.delete_template(id)['library'].map { |e| e['type'] }, id
+  end
+
+  def test_duplicate_names_and_bad_json_are_refused
+    shelf_id
+    assert_raises(ArgumentError) { @c.save_template(JSON.generate(Ex::OPEN_SHELF_UNIT)) } # same name as the installed one
+    bad = @c.save_template('{nope')
+    refute bad['ok']
+    assert_match(/Not valid JSON/, bad['errors'].first)
+    assert_raises(ArgumentError) { @c.install_example('nope') }
+  end
+
+  # --- presets ("save as template") ----------------------------------------------------------------------------------------
+  def test_save_preset_appears_in_the_library_and_creates_matching_cabinets
+    st = @c.save_preset('Sink base 900', 'BASE CABINETS', 'Two doors, no shelf', 'base_cabinet',
+                        { 'width' => 900, 'height' => 820, 'toe_kick_height' => 100, 'door_count' => 2, 'shelf_count' => 0 })
+    entry = st['library'].find { |e| e['name'] == 'Sink base 900' }
+    assert_equal ['preset_1', 'preset'], entry.values_at('type', 'user')
+    res = @c.create('preset_1', {})
+    assert res['created']
+    assert_equal [900.0, 2, 0], res['cabinet']['params'].values_at('width', 'door_count', 'shelf_count')
+    assert_equal 'preset_1', res['cabinet']['type']
+    assert_equal 2, @c.parts_list['rows'].count { |r| r['key'].start_with?('door_') }
+    assert_raises(ArgumentError) { @c.save_preset('Sink base 900', 'X', '', 'base_cabinet', {}) } # name taken
+    assert_raises(ArgumentError) { @c.save_preset('From template', 'X', '', shelf_id, {}) } # templates are not preset bases
+    assert_raises(ArgumentError) { @c.save_preset('Bad', 'X', '', 'base_cabinet', { 'width' => 5 }) }
+    assert_raises(ArgumentError) { @c.delete_preset('preset_1') } # in use
+  end
+
+  # --- portability --------------------------------------------------------------------------------------------------------------
+  def test_model_carries_its_templates_and_presets_to_another_machine
+    @c.save_preset('Sink base 900', 'BASE CABINETS', '', 'base_cabinet', { 'width' => 900 })
+    @c.create(shelf_id, {})
+    @c.create('preset_1', {})
+    CabinetCraft::Templates.config = CabinetCraft::Templates::Config.new # a fresh machine
+    assert_nil CabinetCraft::Templates.find('tpl_1')
+    rows = @c.parts_list['rows'] # any report restores what the model needs
+    refute_nil CabinetCraft::Templates.find('tpl_1')
+    assert_equal 2, rows.map { |r| r['cabinet_label'] }.uniq.size
+    assert_includes @c.library_state['library'].map { |e| e['type'] }, 'preset_1'
+    assert_equal 'valid', @c.validate['summary']['status'].then { |s| s == 'warning' ? 'valid' : s }, @c.validate['issues'].inspect
+  end
+
+  def test_missing_template_without_snapshot_is_reported_not_a_crash
+    @c.create(shelf_id, {})
+    @model.set_attribute('CabinetCraft_Project', 'templates_snapshot', '{}')
+    CabinetCraft::Templates.config = CabinetCraft::Templates::Config.new
+    assert_equal 1, @c.list['cabinets'].size, 'the cabinet is still readable'
+    assert_empty @c.parts_list['rows']
+    assert_match(/not available on this machine/, @c.validate['issues'].first['message'])
+    # an inert cabinet must not cascade into "missing part" errors
+    refute(@c.validate['issues'].any? { |i| i['code'] == 'missing_in_model' || i['code'] == 'unexpected_geometry' })
+  end
+
+  def test_untrusted_snapshots_are_validated
+    evil = { 'templates' => [{ 'id' => 'tpl_9', 'name' => 'x', 'panels' => [{ 'key' => 'p', 'role' => 'side', 'material' => 'mdf_18', 'size' => ['`ls`', '1', '1'], 'origin' => %w[0 0 0], 'thickness_axis' => 'x' }] },
+                             { 'id' => 'not_an_id', 'name' => 'y' }], 'presets' => [{ 'id' => 'preset_9', 'name' => 'z', 'base_type' => 'base_cabinet', 'defaults' => { 'width' => 5 } }] }
+    @model.set_attribute('CabinetCraft_Project', 'templates_snapshot', JSON.generate(evil))
+    @c.library_state
+    assert_empty CabinetCraft::Templates.config.templates
+    assert_empty CabinetCraft::Templates.config.presets
   end
 end

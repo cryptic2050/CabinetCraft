@@ -27,6 +27,7 @@
   const SECTIONS = [
     { id: 'project', label: 'PROJECT', phase: 0 },
     { id: 'cabinets', label: 'CABINETS', phase: 0 },
+    { id: 'templates', label: 'TEMPLATES', phase: 0 },
     { id: 'parameters', label: 'PARAMETERS', phase: 0 },
     { id: 'materials', label: 'MATERIALS', phase: 0 },
     { id: 'hardware', label: 'HARDWARE', phase: 0 },
@@ -42,10 +43,18 @@
     type: 'base_cabinet', params: null, editing: null, preview: null, cabinets: [], search: '', timer: null, busy: false,
     partsMode: 'project', projectRows: null, partsSearch: '', partsCabinet: '', partsMaterial: '', sort: { key: 'part_id', dir: 1 },
     cutting: null, hw: null,
-    mats: null, matSel: null, adv: null, advOpen: false, cnc: null, cncCheck: null, cncPrev: null, cncFace: 'a', cncMat: '', cncSheet: 0, nest: null, nestMat: 0, nestSheet: 0, nestSel: null, health: null, labels: null, lookup: null
+    tpls: null, tplSel: null, tplText: '', tplResult: null, mats: null, matSel: null, adv: null, advOpen: false, cnc: null, cncCheck: null, cncPrev: null, cncFace: 'a', cncMat: '', cncSheet: 0, nest: null, nestMat: 0, nestSheet: 0, nestSel: null, health: null, labels: null, lookup: null
   };
   function load(k, d) { try { return localStorage.getItem(k) || d; } catch (e) { return d; } }
   function save(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* storage may be blocked */ } }
+
+  // Parameter schema for a cabinet type: user templates have their own, built-in types share one.
+  const schemaFor = (type) => (S.boot.schemas && S.boot.schemas[type]) || S.boot.schema;
+  function setLibrary(lib, schemas) {
+    S.boot.library = lib; S.boot.schemas = schemas; S.boot.defaults = {};
+    lib.forEach((e) => { const d = {}; schemaFor(e.type).forEach((f) => (d[f.key] = f.default)); S.boot.defaults[e.type] = Object.assign(d, e.defaults); });
+  }
+  function refreshLibrary() { return rpc('library_state').then((l) => { setLibrary(l.library, l.schemas); if (S.tab === 'cabinets') render(); }).catch(() => {}); }
 
   // ---- Helpers --------------------------------------------------------------
   const UNIT_MM = { mm: 1, cm: 10, m: 1000, in: 25.4 };
@@ -154,6 +163,7 @@
     else if (S.tab === 'parameters') { v.innerHTML = parametersView(); bindParameters(); paintResults(); }
     else if (S.tab === 'materials') { v.innerHTML = '<p class="mute">Loading...</p>'; loadMaterials(); }
     else if (S.tab === 'parts') { v.innerHTML = partsShell(); bindParts(); loadParts(); }
+    else if (S.tab === 'templates') { v.innerHTML = '<p class="mute">Loading...</p>'; loadTemplates(); }
     else if (S.tab === 'cnc') { v.innerHTML = '<p class="mute">Loading...</p>'; loadCnc(); }
     else if (S.tab === 'nesting') { v.innerHTML = '<p class="mute">Loading...</p>'; loadNesting(); }
     else if (S.tab === 'labels') { v.innerHTML = '<p class="mute">Loading...</p>'; loadLabels(); }
@@ -173,7 +183,7 @@
   function cabinetsView() {
     const q = S.search.toLowerCase();
     const impl = S.boot.library.filter((e) => !q || (e.name + e.category).toLowerCase().includes(q)).map((e) =>
-      `<div class="card"><h3>${esc(e.name)}<span class="badge impl">IMPLEMENTED</span></h3><p>${esc(e.description)}</p>
+      `<div class="card"><h3>${esc(e.name)}<span class="badge impl">${e.user === 'template' ? 'TEMPLATE' : e.user === 'preset' ? 'SAVED' : 'IMPLEMENTED'}</span></h3><p>${esc(e.description)}</p>
        <button class="primary" data-new="${esc(e.type)}">Configure &amp; create</button></div>`).join('');
     const planned = Object.entries(S.boot.planned).map(([cat, names]) => {
       const f = names.filter((n) => !q || (n + cat).toLowerCase().includes(q));
@@ -195,13 +205,15 @@
   function parametersView() {
     if (!S.params) return '<div class="card"><h3>No cabinet selected</h3><p>Pick a cabinet type in CABINETS, or select a CabinetCraft cabinet in the model.</p></div>';
     const groups = {};
-    S.boot.schema.forEach((f) => (groups[f.group] = groups[f.group] || []).push(f));
+    schemaFor(S.type).forEach((f) => (groups[f.group] = groups[f.group] || []).push(f));
     const title = S.editing ? `Editing ${esc(S.editing.label)} <span class="mute">v${S.editing.version}</span>` : 'New cabinet';
     const body = Object.entries(groups).map(([g, fields]) =>
       `<details open><summary>${esc(g)}</summary><div class="fields">${fields.map(fieldHtml).join('')}</div></details>`).join('');
-    const action = S.editing
+    const lib = S.boot.library.find((e) => e.type === S.type);
+    const canSave = !(lib && lib.user === 'template'); // templates are edited in TEMPLATES; everything else can be saved as a preset
+    const action = (S.editing
       ? `<span class="mute">Changes apply to the model as you type.</span> <button class="ghost" id="newcab">New cabinet</button>`
-      : `<button class="primary" id="create" ${S.busy ? 'disabled' : ''}>CREATE</button>`;
+      : `<button class="primary" id="create" ${S.busy ? 'disabled' : ''}>CREATE</button>`) + (canSave ? ' <button class="ghost" id="saveas">Save as template...</button>' : '');
     return `<h2>${title}</h2><div class="row" style="margin-bottom:10px">${action}</div>
       <div id="ovr_warn"></div><div id="issues"></div>${body}<h2>CALCULATED</h2><div id="calc"></div>
       ${S.editing ? `<h2>ADVANCED PARTS</h2><details id="adv" ${S.advOpen ? 'open' : ''}><summary>MANUAL OVERRIDES (AUTO unless changed)</summary><div id="advbody" style="padding:10px 12px"><p class="mute">Loading...</p></div></details>` : ''}`;
@@ -223,11 +235,16 @@
   function bindParameters() {
     document.querySelectorAll('[data-key]').forEach((el) => {
       el.oninput = el.onchange = () => {
-        const f = S.boot.schema.find((x) => x.key === el.dataset.key);
+        const f = schemaFor(S.type).find((x) => x.key === el.dataset.key);
         S.params[f.key] = f.type === 'enum' ? el.value : f.type === 'int' ? parseFloat(el.value) : fromDisp(el.value);
         schedule();
       };
     });
+    const sa = $('#saveas'); if (sa) sa.onclick = () => {
+      const name = prompt('Name for the new cabinet template'); if (!name) return;
+      const cat = prompt('Category (e.g. BASE CABINETS, WARDROBES, CUSTOM)', (S.boot.library.find((e) => e.type === S.type) || {}).category || 'CUSTOM'); if (cat === null) return;
+      rpc('save_preset', [name, cat, '', S.editing ? S.editing.type : S.type, S.params]).then((st) => { setLibrary(st.library, st.schemas); toast('Saved - it is now in the CABINETS library'); }).catch(showError);
+    };
     const adv = $('#adv'); if (adv) { adv.ontoggle = () => { S.advOpen = adv.open; if (adv.open) loadAdvanced(); }; if (adv.open) loadAdvanced(); }
     const c = $('#create'); if (c) c.onclick = doCreate;
     const n = $('#newcab'); if (n) n.onclick = () => { S.editing = null; S.preview = null; S.params = Object.assign({}, S.boot.defaults[S.type]); render(); runPreview(); };
@@ -243,7 +260,9 @@
       if (f) { if (i.severity === 'error') f.classList.add('bad'); const m = f.querySelector('.msg'); m.textContent = i.message; m.className = 'msg ' + i.severity; }
     });
     if (issues) issues.innerHTML = (p.issues || []).length ? `<ul class="issues">${p.issues.map((i) => `<li class="${i.severity}">${esc(i.message)}</li>`).join('')}</ul>` : '';
-    if (calc && p.values && p.values.internal_width != null) {
+    if (calc && p.derived && p.derived.length) {
+      calc.innerHTML = `<div class="card"><table>${p.derived.map((d) => `<tr><td>${esc(d.label)}</td><td class="num">${fmt(d.value)} ${S.unit}</td></tr>`).join('')}</table></div>`;
+    } else if (calc && p.values && p.values.internal_width != null) {
       const v = p.values;
       const rows = [['Internal width', v.internal_width], ['Side height', v.side_height], ['Back panel', `${fmt(v.back_width)} x ${fmt(v.back_height)}`]];
       if (v.open_zone) rows.push(['Shelf', v.shelf_count ? `${fmt(v.shelf_width)} x ${fmt(v.shelf_depth)}` : '-'], ['Compartment width', v.compartment_width]);
@@ -568,7 +587,7 @@
 
   // ---- Hardware --------------------------------------------------------------------
   function loadHardware() { rpc('hardware_state').then(setHw).catch(showError); }
-  function setHw(h) { S.hw = h; S.boot.schema = h.schema; if (S.tab === 'hardware') paintHardware(); }
+  function setHw(h) { S.hw = h; S.boot.schema = h.schema; refreshLibrary(); if (S.tab === 'hardware') paintHardware(); }
   function hwCall(method, args) { return rpc(method, args).then((h) => { setHw(h); toast('Saved'); }).catch(showError); }
   function paintHardware() {
     const h = S.hw; const v = $('#view');
@@ -604,9 +623,51 @@
     v.querySelectorAll('[data-rmrule]').forEach((b) => (b.onclick = () => { const r = readRules(); r.splice(+b.dataset.rmrule, 1); S.hw.hinge_rules = r; paintHardware(); }));
   }
 
+  // ---- Templates (custom parametric cabinets) ---------------------------------------------------------
+  function loadTemplates() { rpc('templates_state').then((t) => { S.tpls = t; paintTemplates(); }).catch(showError); }
+  function paintTemplates() {
+    const v = $('#view'); const t = S.tpls; if (S.tab !== 'templates' || !t) return;
+    const sel = t.templates.find((x) => x.id === S.tplSel);
+    const text = S.tplText || (sel ? sel.json : '');
+    const rows = t.templates.map((x) => `<tr class="clickable ${x.id === S.tplSel ? 'sel' : ''}" data-tpl="${esc(x.id)}"><td>${esc(x.name)} <span class="badge impl">TEMPLATE</span></td><td class="mute">${esc(x.category)}</td><td class="num">${x.parameters} params, ${x.panels} panels</td><td class="mute">${esc(x.used_by.join(', '))}</td></tr>`).join('');
+    const presets = t.presets.map((x) => `<tr><td>${esc(x.name)} <span class="badge plan">SAVED</span></td><td class="mute">${esc(x.category)}</td><td class="mute">${esc(x.description || '')}</td><td class="num"><button class="ghost" data-delpreset="${esc(x.id)}">Delete</button></td></tr>`).join('');
+    const res = S.tplResult;
+    const result = !res ? '' : res.ok === false ? `<ul class="issues">${res.errors.map((e) => `<li class="error">${esc(e)}</li>`).join('')}</ul>` :
+      `<div class="card"><h3>${esc(res.name)} builds ${res.panels.length} parts with its default values</h3>${(res.issues || []).length ? `<ul class="issues">${res.issues.map((i) => `<li class="${i.severity}">${esc(i.message)}</li>`).join('')}</ul>` : ''}
+      ${res.derived.length ? `<table>${res.derived.map((d) => `<tr><td>${esc(d.label)}</td><td class="num">${fmt(d.value)} ${S.unit}</td></tr>`).join('')}</table>` : ''}
+      <table style="margin-top:8px"><thead><tr><th>PART</th><th>LENGTH</th><th>WIDTH</th><th>THK</th><th>MATERIAL</th></tr></thead><tbody>${res.panels.map((p) => `<tr><td>${esc(p.name)}</td><td class="num">${fmt(p.length)}</td><td class="num">${fmt(p.width)}</td><td class="num">${fmt(p.thickness)}</td><td>${esc(p.material)}</td></tr>`).join('')}</tbody></table>
+      ${res.hardware.length ? `<p class="mute">Hardware: ${res.hardware.map((h) => h.qty + ' x ' + esc(h.name)).join(', ')}</p>` : ''}</div>`;
+    v.innerHTML = `<h2>TEMPLATES</h2><div class="card">${t.templates.length ? `<table>${rows}</table>` : '<p class="mute">No templates yet. Load an example below, or write your own.</p>'}
+      ${t.presets.length ? `<h3 style="margin-top:12px">Saved from cabinets</h3><table>${presets}</table>` : ''}</div>
+      <h2>${sel ? 'EDIT: ' + esc(sel.name.toUpperCase()) : 'NEW TEMPLATE'}</h2><div class="card">
+      <div class="row" style="margin-bottom:8px"><button class="ghost" id="tp_new">New (blank)</button>
+      <select id="tp_ex"><option value="">Load an example...</option>${Object.entries(t.examples).map(([k, e]) => `<option value="${k}">${esc(e.name)}</option>`).join('')}</select>
+      ${sel ? '<button class="ghost" id="tp_del">Delete template</button>' : ''}</div>
+      <textarea id="tp_json" rows="18" spellcheck="false" style="width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:6px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;padding:8px">${esc(text)}</textarea>
+      <div class="row" style="margin-top:8px"><button class="ghost" id="tp_check">Validate &amp; preview</button><button class="primary" id="tp_save">${sel ? 'Save changes' : 'Save as new template'}</button>${t.examples && !sel ? '<button class="ghost" id="tp_install">Install an example as-is</button>' : ''}</div></div>
+      ${result}
+      <details><summary>FORMAT HELP</summary><div class="card" style="margin:0;border:0"><p>A template is JSON: <b>parameters</b> (what the user enters), <b>derived</b> (named formulas), <b>constraints</b> (rules that must hold), <b>panels</b> (parts with formulas for size and position) and <b>hardware</b> (items with quantity formulas).</p>
+      <p>Axes: x = width, y = depth (front to back), z = height. A panel's <code>size</code> is its extent along x, y, z and <code>origin</code> its minimum corner. A panel with <code>repeat</code> is made N times with <code>i</code> (0, 1, ...) and <code>n</code> available; <code>if</code> includes it only when the formula is non-zero. A material parameter <code>m</code> also gives <code>m_t</code>, its thickness.</p>
+      <p>Formulas: numbers, parameter / derived names, <code>+ - * / %</code>, comparisons, <code>&amp;&amp; || !</code>, and <code>${t.functions.join(', ')}</code>. Roles: ${t.roles.join(', ')}. Parameter types: ${t.param_types.join(', ')}.</p>
+      <p class="mute">Templates have no drilling data: CNC output excludes them (a warning says so).</p></div></details>
+      <p class="mute">Saved templates appear in CABINETS straight away. They are also stored inside this model, so it opens correctly on another machine.</p>`;
+    v.querySelectorAll('tr[data-tpl]').forEach((r) => (r.onclick = () => { S.tplSel = r.dataset.tpl; S.tplText = ''; S.tplResult = null; paintTemplates(); }));
+    $('#tp_json').oninput = (e) => (S.tplText = e.target.value);
+    $('#tp_new').onclick = () => { S.tplSel = null; S.tplText = '{\n  "name": "My cabinet",\n  "category": "CUSTOM",\n  "parameters": [],\n  "panels": []\n}'; S.tplResult = null; paintTemplates(); };
+    $('#tp_ex').onchange = (e) => { if (!e.target.value) return; S.tplSel = null; S.tplText = t.examples[e.target.value].json; S.tplResult = null; paintTemplates(); };
+    $('#tp_check').onclick = () => rpc('validate_template', [$('#tp_json').value]).then((r) => { S.tplResult = r; S.tplText = $('#tp_json').value; paintTemplates(); }).catch(showError);
+    $('#tp_save').onclick = () => rpc('save_template', [$('#tp_json').value, sel ? sel.id : '']).then((r) => {
+      if (r.ok === false) { S.tplResult = r; S.tplText = $('#tp_json').value; paintTemplates(); return; }
+      S.tpls = r; S.tplSel = r.saved_id; S.tplText = ''; S.tplResult = null; setLibrary(r.library, r.schemas); paintTemplates(); toast('Template saved - see CABINETS');
+    }).catch(showError);
+    if ($('#tp_del')) $('#tp_del').onclick = () => rpc('delete_template', [sel.id]).then((r) => { S.tpls = r; S.tplSel = null; S.tplText = ''; setLibrary(r.library, r.schemas); paintTemplates(); toast('Deleted'); }).catch(showError);
+    if ($('#tp_install')) $('#tp_install').onclick = () => { const k = $('#tp_ex').value; if (!k) { toast('Choose an example first'); return; } rpc('install_example', [k]).then((r) => { S.tpls = r; S.tplSel = r.saved_id; setLibrary(r.library, r.schemas); paintTemplates(); toast('Example installed'); }).catch(showError); };
+    v.querySelectorAll('[data-delpreset]').forEach((b) => (b.onclick = () => rpc('delete_preset', [b.dataset.delpreset]).then((r) => { S.tpls = r; setLibrary(r.library, r.schemas); paintTemplates(); toast('Deleted'); }).catch(showError)));
+  }
+
   // ---- Materials (editable) ----------------------------------------------------------------
   function loadMaterials() { rpc('materials_state').then(setMats).catch(showError); }
-  function setMats(m) { S.mats = m; S.boot.schema = m.schema; if (S.tab === 'materials') paintMaterials(); }
+  function setMats(m) { S.mats = m; S.boot.schema = m.schema; refreshLibrary(); if (S.tab === 'materials') paintMaterials(); }
   function paintMaterials() {
     const v = $('#view'); const m = S.mats; if (S.tab !== 'materials' || !m) return;
     const sel = m.materials.find((x) => x.id === S.matSel) || null; const isNew = !sel; const builtIn = sel && !sel.custom;
@@ -688,8 +749,7 @@
   function start() {
     rpc('bootstrap').then((b) => {
       S.boot = b;
-      S.boot.defaults = {};
-      b.library.forEach((e) => { const d = {}; b.schema.forEach((f) => (d[f.key] = f.default)); S.boot.defaults[e.type] = Object.assign(d, e.defaults); });
+      setLibrary(b.library, b.schemas || {});
       S.params = Object.assign({}, S.boot.defaults[S.type]); S.cabinets = b.cabinets;
       if (b.selected) loadCabinet(b.selected); else render();
     }).catch((e) => { $('#view').innerHTML = `<div class="card"><h3>Cannot connect</h3><p>${esc(e.message)}</p></div>`; });

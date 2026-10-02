@@ -25,7 +25,7 @@ module CabinetCraft
 
       # => { 'ops' => [...], 'issues' => [{ 'severity', 'code', 'message', 'part_key' }] }
       def operations(cabinet, config = MachiningConfig.current, hw_settings = Hardware.config.settings)
-        return { 'ops' => [], 'issues' => [] } unless cabinet.calculation.ok?
+        return { 'ops' => [], 'issues' => [] } unless cabinet.calculation.ok? && !cabinet.custom? # templates carry no machining rules
 
         ctx = { cab: cabinet, panels: cabinet.panels.to_h { |p| [p.key, p] }, v: cabinet.calculation.values,
                 params: cabinet.params, st: config.settings, hw: hw_settings, ops: [], issues: [] }

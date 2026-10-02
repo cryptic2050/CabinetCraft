@@ -49,10 +49,13 @@ module CabinetCraft
       def check_machining(cabinets)
         res = Manufacturing::Machining.for_project(cabinets)
         by_id = cabinets.to_h { |c| [c.id, c] }
+        custom = cabinets.select(&:custom?).map do |c|
+          issue(:warning, 'machining_unsupported', "#{c.label} comes from a custom template: no drilling data is generated for it", cabinet: c)
+        end
         res['issues'].map do |i|
           cab = by_id[i['cabinet_id']]
           issue(i['severity'].to_sym, i['code'], i['message'], cabinet: cab, part_key: i['part_key'])
-        end + MachiningChecker.check(res['ops'])
+        end + custom + MachiningChecker.check(res['ops'])
       end
 
       def check_cabinet(cab)
@@ -66,11 +69,11 @@ module CabinetCraft
         return out unless calc.ok? # panels are not meaningful when the rules fail
 
         out.concat(check_panels(cab))
-        out.concat(check_hardware(cab))
+        out.concat(check_hardware(cab)) unless cab.custom?
         out.concat(check_edges_and_grain(cab))
-        out.concat(check_edge_options(cab))
+        out.concat(check_edge_options(cab)) unless cab.custom?
         out.concat(check_overrides(cab))
-        out.concat(check_clearances(cab, p))
+        out.concat(check_clearances(cab, p)) unless cab.custom?
         out
       end
 
@@ -106,11 +109,8 @@ module CabinetCraft
 
       def check_panels(cab)
         out = []
-        v = cab.calculation.values
         keys = cab.panels.map(&:key)
-        expected = %w[bottom side_left side_right back]
-        expected += v['door_widths'].each_index.map { |i| "door_#{i + 1}" }
-        expected += v['drawer_fronts'].each_index.map { |i| "drawer_#{i + 1}_front" }
+        expected = cab.expected_keys
         (expected - keys).each { |k| out << issue(:error, 'missing_panel', "Expected panel '#{k}' was not generated", cabinet: cab, part_key: k) }
 
         cab.panels.each do |pn|
@@ -142,7 +142,7 @@ module CabinetCraft
       def check_edges_and_grain(cab)
         out = []
         cab.panels.each do |pn|
-          if EdgeBanding::RULES.key?(pn.role) && pn.edges.empty?
+          if !cab.custom? && EdgeBanding::RULES.key?(pn.role) && pn.edges.empty?
             fronts = %i[door drawer_front].include?(pn.role)
             out << issue(:warning, 'missing_edge_banding', "#{pn.name} has no edge banding#{fronts ? ' on a visible front' : ''}", cabinet: cab, part_key: pn.key)
           end

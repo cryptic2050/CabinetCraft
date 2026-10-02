@@ -38,6 +38,8 @@ module CabinetCraft
                           labels lookup_part validate select_target
                           materials_state save_material delete_material reset_material
                           advanced_parts set_override reset_overrides
+                          library_state templates_state validate_template save_template delete_template install_example
+                          save_preset delete_preset
                           machining_state set_machining_setting add_pattern delete_pattern select_machine save_machine
                           delete_machine save_post delete_post cnc_check cnc_preview].freeze
 
@@ -56,9 +58,10 @@ module CabinetCraft
       def bootstrap
         {
           'version' => defined?(CabinetCraft::VERSION) ? CabinetCraft::VERSION : 'dev',
-          'library' => Library::ENTRIES,
+          'library' => (sync_templates && Library.entries),
           'planned' => Library::PLANNED,
           'schema' => Parameter.schema,
+          'schemas' => template_schemas,
           'materials' => (sync_materials && Material.all.map(&:to_h)),
           'profiles' => Construction.list,
           'cabinets' => list['cabinets'],
@@ -75,7 +78,7 @@ module CabinetCraft
       def preview(type, raw, label = nil, cabinet_id = nil)
         Library.entry(type) or return failure("Unknown cabinet type '#{type}'")
         # Preset defaults sit under whatever the caller supplies.
-        params, errors = Parameter.coerce(Library.defaults_for(type).merge((raw || {}).transform_keys(&:to_s)))
+        params, errors = Parameter.coerce(Library.defaults_for(type).merge((raw || {}).transform_keys(&:to_s)), Library.schema_for(type))
         return { 'ok' => false, 'params' => params, 'issues' => errors, 'panels' => [], 'values' => {} } unless errors.empty?
 
         cab = Cabinet.build(type: type, params: params, label: label || Scene::Registry.next_label(model))
@@ -85,8 +88,9 @@ module CabinetCraft
         issues = cab.calculation.issues.map(&:to_h)
         ok = cab.calculation.ok?
         issues += cab.hardware_issues if ok
+        derived = cab.custom? && cab.template ? cab.template.derived.map { |d| { 'name' => d['name'], 'label' => d['label'], 'value' => cab.calculation.values[d['name']] } } : nil
         {
-          'ok' => ok, 'params' => params, 'issues' => issues, 'values' => cab.calculation.values,
+          'ok' => ok, 'params' => params, 'issues' => issues, 'values' => cab.calculation.values, 'derived' => derived,
           'panels' => ok ? cab.part_rows : [], 'hardware' => ok ? cab.hardware_rows : []
         }
       end
@@ -105,6 +109,7 @@ module CabinetCraft
           model.selection.clear
           model.selection.add(group)
           snapshot_materials
+          snapshot_templates
         end
         prev.merge('created' => true, 'cabinet' => cabinet.summary, 'panels' => cabinet.part_rows)
       end
@@ -139,6 +144,7 @@ module CabinetCraft
         in_operation('CabinetCraft: Edit cabinet') do
           Generators::CabinetGenerator.rebuild(group, updated)
           snapshot_materials
+          snapshot_templates
         end
         prev.merge('updated' => true, 'cabinet' => updated.summary, 'panels' => updated.part_rows, 'reset' => mode == 'reset')
       end
@@ -210,7 +216,100 @@ module CabinetCraft
 
       def project_cabinets
         sync_materials
+        sync_templates
         Scene::Registry.cabinets(model).map(&:last)
+      end
+
+      # --- Templates and presets -------------------------------------------------------------------
+
+      # Restores templates / presets stored in the model that this machine does not have yet.
+      def sync_templates
+        Templates.config.import_missing(project_store.templates_snapshot)
+      end
+
+      def snapshot_templates
+        project_store.templates_snapshot = Templates.config.snapshot
+      end
+
+      def template_schemas
+        Library.template_entries.to_h { |e| [e['type'], Templates.find(e['type']).schema] }
+      end
+
+      def library_state
+        sync_templates
+        { 'library' => Library.entries, 'schemas' => template_schemas, 'planned' => Library::PLANNED }
+      end
+
+      def type_users(type)
+        Scene::Registry.cabinets(model).select { |_, c| c.type == type }.map { |_, c| c.label }
+      end
+
+      def templates_state
+        sync_templates
+        cfg = Templates.config
+        {
+          'templates' => cfg.templates.map do |t|
+            h = t.to_h
+            { 'id' => t.id, 'name' => t.name, 'category' => t.category, 'description' => t.description, 'json' => JSON.pretty_generate(h),
+              'parameters' => h['parameters'].size, 'panels' => h['panels'].size, 'used_by' => type_users(t.id) }
+          end,
+          'presets' => cfg.presets.map { |p| p.merge('used_by' => type_users(p['id'])) },
+          'examples' => Templates::Examples::ALL.to_h { |k, v| [k, { 'name' => v['name'], 'description' => v['description'], 'json' => JSON.pretty_generate(v) }] },
+          'roles' => Templates::Template::ROLES, 'param_types' => Templates::Template::PARAM_TYPES,
+          'functions' => Templates::Expression::FUNCTIONS.keys, 'hardware' => Hardware.all.reject(&:hidden).map { |h| [h.id, h.name, h.category] }
+        }
+      end
+
+      # Checks a template's JSON and shows what it builds with its default values. Never changes anything.
+      def validate_template(json)
+        t = Templates::Template.from_json(json.to_s)
+        b = t.build(t.defaults)
+        rows = b.panels.map { |p| p.to_h(part_id: "PREVIEW-#{p.key.upcase}", cabinet_id: 'preview') }
+        labels = t.derived.to_h { |d| [d['name'], d['label']] }
+        { 'ok' => true, 'name' => t.name, 'parameters' => t.parameters.size, 'panels' => rows, 'hardware' => b.hardware,
+          'derived' => b.result.values.select { |k, _| labels.key?(k) }.map { |k, v| { 'name' => k, 'label' => labels[k], 'value' => v } },
+          'issues' => b.result.issues.map(&:to_h), 'defaults' => t.defaults }
+      rescue Templates::Template::Invalid => e
+        { 'ok' => false, 'errors' => e.errors }
+      end
+
+      def save_template(json, id = nil)
+        t = Templates.config.save_template(json, id)
+        regenerate(Scene::Registry.cabinets(model).select { |_, c| c.type == t.id }, 'CabinetCraft: Edit template')
+        snapshot_templates
+        templates_state.merge('saved_id' => t.id, 'library' => Library.entries, 'schemas' => template_schemas)
+      rescue Templates::Template::Invalid => e
+        { 'ok' => false, 'errors' => e.errors }
+      end
+
+      def delete_template(id)
+        users = type_users(id)
+        raise ArgumentError, "In use by #{users.join(', ')} - delete or change those cabinets first" unless users.empty?
+
+        Templates.config.delete_template(id) or raise ArgumentError, 'Unknown template'
+        snapshot_templates
+        templates_state.merge('library' => Library.entries, 'schemas' => template_schemas)
+      end
+
+      def install_example(key)
+        ex = Templates::Examples::ALL[key] or raise ArgumentError, 'Unknown example'
+        save_template(ex)
+      end
+
+      # Saves the given parameters of a built-in cabinet as a new library entry ("save as template").
+      def save_preset(name, category, description, base_type, params)
+        Templates.config.save_preset(name: name, category: category, description: description, base_type: base_type, params: params)
+        snapshot_templates
+        templates_state.merge('library' => Library.entries, 'schemas' => template_schemas)
+      end
+
+      def delete_preset(id)
+        users = type_users(id)
+        raise ArgumentError, "In use by #{users.join(', ')}" unless users.empty?
+
+        Templates.config.delete_preset(id) or raise ArgumentError, 'Unknown preset'
+        snapshot_templates
+        templates_state.merge('library' => Library.entries, 'schemas' => template_schemas)
       end
 
       # --- Materials ----------------------------------------------------------------------------

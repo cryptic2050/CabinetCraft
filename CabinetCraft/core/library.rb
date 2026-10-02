@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative 'parameter'
+require_relative '../templates/registry'
 
 module CabinetCraft
   # Cabinet type library. Only types with a working generator are in ENTRIES;
@@ -60,18 +61,44 @@ module CabinetCraft
       'WARDROBES' => ['2-door wardrobe', '3-door wardrobe', 'Sliding wardrobe', 'Hinged wardrobe', 'Open wardrobe',
                       'Wardrobe with drawers', 'Hanging section', 'Shelf section', 'Walk-in modules'],
       'VANITIES' => ['Single vanity', 'Double vanity', 'Drawer vanity', 'Open vanity'],
-      'TV UNITS' => ['Floating TV unit', 'Full-height TV wall', 'Base TV cabinet', 'Open shelf TV unit'],
-      'CUSTOM' => ['Custom parametric cabinet (template creator, Phase 6)']
+      'TV UNITS' => ['Floating TV unit (installable example in TEMPLATES)', 'Full-height TV wall', 'Base TV cabinet', 'Open shelf TV unit']
     }.freeze
 
     module_function
 
+    # Built-in cabinets, then the user's presets and templates (all dynamic).
+    def entries
+      ENTRIES + preset_entries + template_entries
+    end
+
+    def preset_entries
+      Templates.config.presets.map do |p|
+        { 'type' => p['id'], 'category' => p['category'], 'name' => p['name'], 'description' => p['description'].to_s, 'defaults' => p['defaults'],
+          'base_type' => p['base_type'], 'user' => 'preset' }
+      end
+    end
+
+    def template_entries
+      Templates.config.templates.map do |t|
+        { 'type' => t.id, 'category' => t.category, 'name' => t.name, 'description' => t.description, 'defaults' => t.defaults, 'user' => 'template' }
+      end
+    end
+
     def entry(type)
-      ENTRIES.find { |e| e['type'] == type }
+      entries.find { |e| e['type'] == type }
+    end
+
+    # Parameter schema for a cabinet type. nil for a template that is not available (e.g. missing on this machine).
+    def schema_for(type)
+      return Templates.find(type)&.schema if Templates.template_type?(type)
+
+      Parameter.schema
     end
 
     def defaults_for(type)
       e = entry(type) or raise KeyError, "Unknown cabinet type '#{type}'"
+      return e['defaults'] if e['user'] == 'template'
+
       Parameter.defaults.merge(e['defaults'])
     end
   end
