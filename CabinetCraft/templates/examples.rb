@@ -78,7 +78,113 @@ module CabinetCraft
         ]
       }.freeze
 
-      ALL = { 'open_shelf_unit' => OPEN_SHELF_UNIT, 'floating_tv_unit' => FLOATING_TV_UNIT }.freeze
+      # L-shaped corner base. Frame: the back corner is the origin, arm A runs along +x (wall A at y = 0) and arm B along +y
+      # (wall B at x = 0). Both fronts face into the room. Two rectangular bottoms and two backs (no mitred or angled boards).
+      # There is no toe kick: it stands on feet or a separate plinth.
+      L_SHAPED_CORNER_BASE = {
+        'name' => 'L-shaped corner base', 'category' => 'CORNER',
+        'description' => 'Corner base cabinet with two arms at 90 degrees, one door per arm. Place it at the inner corner of two walls: arm A along +X, arm B along +Y.',
+        'parameters' => [
+          { 'key' => 'width_a', 'label' => 'Arm A length (along wall A)', 'type' => 'length', 'default' => 900, 'min' => 600, 'max' => 1400, 'group' => 'DIMENSIONS' },
+          { 'key' => 'width_b', 'label' => 'Arm B length (along wall B)', 'type' => 'length', 'default' => 900, 'min' => 600, 'max' => 1400, 'group' => 'DIMENSIONS' },
+          { 'key' => 'depth', 'label' => 'Depth of both arms', 'type' => 'length', 'default' => 560, 'min' => 300, 'max' => 700, 'group' => 'DIMENSIONS' },
+          { 'key' => 'height', 'label' => 'Carcass height', 'type' => 'length', 'default' => 720, 'min' => 300, 'max' => 1000, 'group' => 'DIMENSIONS' },
+          { 'key' => 'toe', 'label' => 'Height above floor (feet)', 'type' => 'length', 'default' => 100, 'min' => 0, 'max' => 200, 'group' => 'DIMENSIONS' },
+          { 'key' => 'board', 'label' => 'Board material', 'type' => 'material', 'default' => 'mdf_18', 'group' => 'MATERIAL' },
+          { 'key' => 'back', 'label' => 'Back material', 'type' => 'material', 'role' => 'back', 'default' => 'hdf_3', 'group' => 'MATERIAL' },
+          { 'key' => 'front', 'label' => 'Door material', 'type' => 'material', 'default' => 'mdf_18', 'group' => 'MATERIAL' },
+          { 'key' => 'hinge', 'label' => 'Hinge', 'type' => 'hardware', 'category' => 'hinge', 'default' => 'hinge_standard', 'group' => 'HARDWARE' },
+          { 'key' => 'edge', 'label' => 'Edge band', 'type' => 'length', 'default' => 1, 'min' => 0, 'max' => 3, 'group' => 'EDGE BANDING' }
+        ],
+        'derived' => [
+          { 'name' => 'door_a_w', 'label' => 'Door A width', 'expr' => 'width_a - depth' },
+          { 'name' => 'door_b_w', 'label' => 'Door B width', 'expr' => 'width_b - depth - front_t' },
+          { 'name' => 'door_h', 'label' => 'Door height', 'expr' => 'height - 4' }
+        ],
+        'constraints' => [
+          { 'expr' => 'door_a_w >= 250', 'message' => 'Arm A is too short for a door: increase its length or reduce the depth', 'severity' => 'error' },
+          { 'expr' => 'door_b_w >= 250', 'message' => 'Arm B is too short for a door: increase its length or reduce the depth', 'severity' => 'error' }
+        ],
+        'panels' => [
+          { 'key' => 'bottom_a', 'name' => 'Bottom A', 'role' => 'bottom', 'material' => 'board', 'size' => ['width_a', 'depth', 'board_t'], 'origin' => ['0', '0', 'toe'],
+            'thickness_axis' => 'z', 'grain_axis' => 'x' },
+          { 'key' => 'bottom_b', 'name' => 'Bottom B', 'role' => 'bottom', 'material' => 'board', 'size' => ['depth', 'width_b - depth', 'board_t'], 'origin' => ['0', 'depth', 'toe'],
+            'thickness_axis' => 'z', 'grain_axis' => 'y' },
+          { 'key' => 'end_a', 'name' => 'End panel A', 'role' => 'side', 'material' => 'board', 'size' => ['board_t', 'depth', 'height - board_t'],
+            'origin' => ['width_a - board_t', '0', 'toe + board_t'], 'thickness_axis' => 'x', 'grain_axis' => 'z', 'edges' => { 'front' => 'edge' } },
+          { 'key' => 'end_b', 'name' => 'End panel B', 'role' => 'side', 'material' => 'board', 'size' => ['depth', 'board_t', 'height - board_t'],
+            'origin' => ['0', 'width_b - board_t', 'toe + board_t'], 'thickness_axis' => 'y', 'grain_axis' => 'z', 'edges' => { 'right' => 'edge' } },
+          { 'key' => 'back_a', 'name' => 'Back A', 'role' => 'back', 'material' => 'back', 'size' => ['width_a - board_t', 'back_t', 'height - board_t'],
+            'origin' => ['0', '0', 'toe + board_t'], 'thickness_axis' => 'y', 'grain_axis' => nil },
+          { 'key' => 'back_b', 'name' => 'Back B', 'role' => 'back', 'material' => 'back', 'size' => ['back_t', 'width_b - board_t - back_t', 'height - board_t'],
+            'origin' => ['0', 'back_t', 'toe + board_t'], 'thickness_axis' => 'x', 'grain_axis' => nil },
+          { 'key' => 'door_a', 'name' => 'Door A', 'role' => 'door', 'material' => 'front', 'size' => ['door_a_w', 'front_t', 'door_h'], 'origin' => ['depth', 'depth', 'toe + 2'],
+            'thickness_axis' => 'y', 'grain_axis' => 'z', 'edges' => { 'left' => '2', 'right' => '2', 'top' => '2', 'bottom' => '2' } },
+          { 'key' => 'door_b', 'name' => 'Door B', 'role' => 'door', 'material' => 'front', 'size' => ['front_t', 'door_b_w', 'door_h'], 'origin' => ['depth', 'depth + front_t', 'toe + 2'],
+            'thickness_axis' => 'x', 'grain_axis' => 'z', 'edges' => { 'front' => '2', 'back' => '2', 'top' => '2', 'bottom' => '2' } }
+        ],
+        'hardware' => [
+          { 'id' => '$hinge', 'qty' => 'if(height > 900, 3, 2)', 'part' => 'door_a', 'detail' => 'hinges on door A' },
+          { 'id' => '$hinge', 'qty' => 'if(height > 900, 3, 2)', 'part' => 'door_b', 'detail' => 'hinges on door B' },
+          { 'id' => 'confirmat', 'qty' => '8', 'part' => 'cabinet', 'detail' => 'end panels and bottoms' }
+        ]
+      }.freeze
+
+      # Blind corner base: a normal base cabinet whose front is split into a door (the accessible part) and a fixed blind panel.
+      # The blind part sits behind the neighbouring run, so only the door width is usable.
+      BLIND_CORNER_BASE = {
+        'name' => 'Blind corner base', 'category' => 'CORNER',
+        'description' => 'Base cabinet with a fixed blind panel on one side that tucks behind the neighbouring run, and a door on the other.',
+        'parameters' => [
+          { 'key' => 'width', 'label' => 'Width', 'type' => 'length', 'default' => 900, 'min' => 600, 'max' => 1400, 'group' => 'DIMENSIONS' },
+          { 'key' => 'blind', 'label' => 'Blind panel width', 'type' => 'length', 'default' => 350, 'min' => 100, 'max' => 800, 'group' => 'DIMENSIONS' },
+          { 'key' => 'blind_right', 'label' => 'Blind panel on the right', 'type' => 'toggle', 'default' => 1, 'group' => 'DIMENSIONS' },
+          { 'key' => 'depth', 'label' => 'Depth', 'type' => 'length', 'default' => 560, 'min' => 300, 'max' => 700, 'group' => 'DIMENSIONS' },
+          { 'key' => 'height', 'label' => 'Carcass height', 'type' => 'length', 'default' => 720, 'min' => 300, 'max' => 1000, 'group' => 'DIMENSIONS' },
+          { 'key' => 'toe', 'label' => 'Height above floor (feet)', 'type' => 'length', 'default' => 100, 'min' => 0, 'max' => 200, 'group' => 'DIMENSIONS' },
+          { 'key' => 'shelves', 'label' => 'Shelves', 'type' => 'int', 'default' => 1, 'min' => 0, 'max' => 4, 'group' => 'CARCASS' },
+          { 'key' => 'board', 'label' => 'Board material', 'type' => 'material', 'default' => 'mdf_18', 'group' => 'MATERIAL' },
+          { 'key' => 'back', 'label' => 'Back material', 'type' => 'material', 'role' => 'back', 'default' => 'hdf_3', 'group' => 'MATERIAL' },
+          { 'key' => 'front', 'label' => 'Front material', 'type' => 'material', 'default' => 'mdf_18', 'group' => 'MATERIAL' },
+          { 'key' => 'hinge', 'label' => 'Hinge', 'type' => 'hardware', 'category' => 'hinge', 'default' => 'hinge_standard', 'group' => 'HARDWARE' },
+          { 'key' => 'edge', 'label' => 'Edge band', 'type' => 'length', 'default' => 1, 'min' => 0, 'max' => 3, 'group' => 'EDGE BANDING' }
+        ],
+        'derived' => [
+          { 'name' => 'inner_w', 'label' => 'Internal width', 'expr' => 'width - 2 * board_t' },
+          { 'name' => 'door_w', 'label' => 'Door width', 'expr' => 'width - blind - 3' },
+          { 'name' => 'door_h', 'label' => 'Front height', 'expr' => 'height - 4' },
+          { 'name' => 'shelf_d', 'label' => 'Shelf depth', 'expr' => 'depth - back_t' }
+        ],
+        'constraints' => [
+          { 'expr' => 'door_w >= 250', 'message' => 'The door would be narrower than 250 mm: reduce the blind panel or widen the cabinet', 'severity' => 'error' },
+          { 'expr' => 'blind <= width / 2', 'message' => 'The blind panel is wider than half the cabinet', 'severity' => 'warning' }
+        ],
+        'panels' => [
+          { 'key' => 'bottom', 'name' => 'Bottom', 'role' => 'bottom', 'material' => 'board', 'size' => ['width', 'depth', 'board_t'], 'origin' => ['0', '0', 'toe'],
+            'thickness_axis' => 'z', 'grain_axis' => 'x', 'edges' => { 'front' => 'edge' } },
+          { 'key' => 'side_left', 'name' => 'Left side', 'role' => 'side', 'material' => 'board', 'size' => ['board_t', 'depth', 'height - board_t'],
+            'origin' => ['0', '0', 'toe + board_t'], 'thickness_axis' => 'x', 'grain_axis' => 'z', 'edges' => { 'front' => 'edge' } },
+          { 'key' => 'side_right', 'name' => 'Right side', 'role' => 'side', 'material' => 'board', 'size' => ['board_t', 'depth', 'height - board_t'],
+            'origin' => ['width - board_t', '0', 'toe + board_t'], 'thickness_axis' => 'x', 'grain_axis' => 'z', 'edges' => { 'front' => 'edge' } },
+          { 'key' => 'back', 'name' => 'Back', 'role' => 'back', 'material' => 'back', 'size' => ['inner_w', 'back_t', 'height - board_t'],
+            'origin' => ['board_t', 'depth - back_t', 'toe + board_t'], 'thickness_axis' => 'y', 'grain_axis' => nil },
+          { 'key' => 'shelf', 'name' => 'Shelf {i}', 'role' => 'shelf', 'material' => 'board', 'repeat' => 'shelves', 'size' => ['inner_w', 'shelf_d', 'board_t'],
+            'origin' => ['board_t', '0', 'toe + board_t + (height - board_t) * (i + 1) / (shelves + 1) - board_t / 2'], 'thickness_axis' => 'z', 'grain_axis' => 'x', 'edges' => { 'front' => 'edge' } },
+          { 'key' => 'door', 'name' => 'Door', 'role' => 'door', 'material' => 'front', 'size' => ['door_w', 'front_t', 'door_h'],
+            'origin' => ['if(blind_right, 0, blind) + 1.5', '-front_t', 'toe + 2'], 'thickness_axis' => 'y', 'grain_axis' => 'z',
+            'edges' => { 'left' => '2', 'right' => '2', 'top' => '2', 'bottom' => '2' } },
+          { 'key' => 'blind_panel', 'name' => 'Blind panel', 'role' => 'panel', 'material' => 'front', 'size' => ['blind', 'front_t', 'door_h'],
+            'origin' => ['if(blind_right, width - blind, 0)', '-front_t', 'toe + 2'], 'thickness_axis' => 'y', 'grain_axis' => 'z',
+            'edges' => { 'left' => '2', 'right' => '2', 'top' => '2', 'bottom' => '2' } }
+        ],
+        'hardware' => [
+          { 'id' => '$hinge', 'qty' => 'if(height > 900, 3, 2)', 'part' => 'door', 'detail' => 'hinges on the door' },
+          { 'id' => 'confirmat', 'qty' => '8', 'part' => 'cabinet', 'detail' => 'sides and bottom' }
+        ]
+      }.freeze
+
+      ALL = { 'open_shelf_unit' => OPEN_SHELF_UNIT, 'floating_tv_unit' => FLOATING_TV_UNIT,
+              'l_shaped_corner_base' => L_SHAPED_CORNER_BASE, 'blind_corner_base' => BLIND_CORNER_BASE }.freeze
     end
   end
 end
