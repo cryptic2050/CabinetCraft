@@ -6,14 +6,17 @@ module CabinetCraft
     # per-user defaults (registry on Windows, plist on macOS). Shared by all models.
     class SettingsStore
       SECTION = 'CabinetCraftPro'
-      KEY = 'hardware_config'
+
+      def initialize(key = 'hardware_config')
+        @key = key
+      end
 
       def read
-        ::Sketchup.read_default(SECTION, KEY, nil)
+        ::Sketchup.read_default(SECTION, @key, nil)
       end
 
       def write(json)
-        ::Sketchup.write_default(SECTION, KEY, json)
+        ::Sketchup.write_default(SECTION, @key, json)
       end
     end
   end

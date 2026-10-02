@@ -10,15 +10,16 @@ module CabinetCraft
       'shelf_pin' => 'Shelf pin', 'leg' => 'Leg / foot', 'lock' => 'Lock'
     }.freeze
 
-    Item = Struct.new(:id, :name, :category, :price, :supplier, :custom, :companions, keyword_init: true) do
+    Item = Struct.new(:id, :name, :category, :price, :supplier, :custom, :companions, :hidden, keyword_init: true) do
       def to_h
         { 'id' => id, 'name' => name, 'category' => category, 'price' => price, 'supplier' => supplier,
-          'custom' => custom, 'companions' => companions }
+          'custom' => custom, 'companions' => companions, 'hidden' => hidden ? true : false }
       end
     end
 
-    def self.item(id, name, category, companions = {})
-      Item.new(id: id, name: name, category: category, price: nil, supplier: nil, custom: false, companions: companions)
+    # hidden items are only ever added as companions of another item (never chosen directly).
+    def self.item(id, name, category, companions = {}, hidden: false)
+      Item.new(id: id, name: name, category: category, price: nil, supplier: nil, custom: false, companions: companions, hidden: hidden)
     end
 
     BUILT_IN = [
@@ -29,7 +30,8 @@ module CabinetCraft
       item('runner_undermount', 'Undermount runner', 'runner'),
       item('runner_soft_close', 'Soft-close runner', 'runner'),
       item('runner_push_open', 'Push-to-open runner', 'runner'),
-      item('cam_lock', 'Cam lock', 'connector', { 'dowel' => 1 }), # each cam needs a dowel
+      item('cam_lock', 'Cam lock', 'connector', { 'cam_bolt' => 1 }), # each cam housing needs a bolt
+      item('cam_bolt', 'Cam bolt', 'connector', {}, hidden: true),
       item('dowel', 'Dowel', 'connector'),
       item('confirmat', 'Confirmat screw', 'connector'),
       item('lamello', 'Lamello', 'connector'),
@@ -169,8 +171,8 @@ module CabinetCraft
         BUILT_IN + config.custom_items
       end
 
-      def by_category(cat)
-        all.select { |i| i.category == cat }
+      def by_category(cat, include_hidden: false)
+        all.select { |i| i.category == cat && (include_hidden || !i.hidden) }
       end
 
       def find(id)

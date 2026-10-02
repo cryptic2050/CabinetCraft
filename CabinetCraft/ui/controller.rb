@@ -15,6 +15,11 @@ require_relative '../exporters/csv_exporter'
 require_relative '../exporters/json_exporter'
 require_relative '../manufacturing/nesting'
 require_relative '../manufacturing/labels'
+require_relative '../manufacturing/machining'
+require_relative '../manufacturing/cnc'
+require_relative '../exporters/dxf_exporter'
+require_relative '../exporters/svg_exporter'
+require_relative '../validation/machining_checker'
 require_relative '../exporters/label_html'
 require_relative '../validation/validator'
 require_relative '../scene/registry'
@@ -29,13 +34,17 @@ module CabinetCraft
       PUBLIC_METHODS = %w[bootstrap preview create update select list parts_list cutting_list hardware_state
                           add_hardware delete_hardware set_hinge_rules set_hardware_setting
                           project_state set_project_name nest nest_lock nest_lock_current nest_unlock nest_unlock_all
-                          labels lookup_part validate select_target].freeze
+                          labels lookup_part validate select_target
+                          machining_state set_machining_setting add_pattern delete_pattern select_machine save_machine
+                          delete_machine save_post delete_post cnc_check cnc_preview].freeze
 
       # kind => [formats]. 'project' is JSON only.
       EXPORTS = { 'parts' => %w[csv excel_csv json], 'cutting_list' => %w[csv excel_csv json],
                   'hardware' => %w[csv excel_csv json], 'project' => %w[json],
-                  'nesting' => %w[csv excel_csv json], 'labels' => %w[html csv excel_csv json] }.freeze
-      EXTENSIONS = { 'csv' => 'csv', 'excel_csv' => 'csv', 'json' => 'json', 'html' => 'html' }.freeze
+                  'nesting' => %w[csv excel_csv json], 'labels' => %w[html csv excel_csv json],
+                  'machining' => %w[csv excel_csv json], 'dxf' => %w[dxf], 'svg' => %w[svg], 'gcode' => %w[nc], 'gcode_b' => %w[nc] }.freeze
+      EXTENSIONS = { 'csv' => 'csv', 'excel_csv' => 'csv', 'json' => 'json', 'html' => 'html', 'dxf' => 'dxf', 'svg' => 'svg', 'nc' => 'nc' }.freeze
+      MULTI_FILE = %w[dxf svg gcode gcode_b].freeze # one file per nested sheet
 
       def model
         ::Sketchup.active_model
@@ -129,6 +138,7 @@ module CabinetCraft
         raise ArgumentError, "#{kind} cannot be exported as #{format}" unless EXPORTS[kind].include?(format)
         raise ArgumentError, 'No file path given' if path.to_s.strip.empty?
         raise ArgumentError, "Folder does not exist: #{File.dirname(path)}" unless Dir.exist?(File.dirname(path))
+        return export_sheets(kind, path) if MULTI_FILE.include?(kind)
 
         content = render_export(kind, format)
         File.binwrite(path, content.encode('UTF-8'))
@@ -160,6 +170,10 @@ module CabinetCraft
           when 'json' then Exporters::JsonExporter.data(list.map { |l| l.reject { |k, _| k == 'qr_svg' } })
           else csv.call(list, Manufacturing::Labels::COLUMNS)
           end
+        when 'machining'
+          ops = Manufacturing::Machining.for_project(cabs)['ops']
+          rows = ops.map { |o| machining_row(o) }
+          format == 'json' ? Exporters::JsonExporter.data(ops) : csv.call(rows, machining_row(ops.first || {}).keys.map { |k| [k, k] })
         when 'hardware'
           list = Manufacturing::CuttingList.hardware(cabs)
           rows = list.map { |h| { 'Hardware' => h['name'], 'Category' => h['category'], 'Qty' => h['qty'] } }
@@ -313,6 +327,154 @@ module CabinetCraft
         model.selection.clear
         model.selection.add(ent)
         { 'ok' => true }
+      end
+
+      # --- Machining and CNC ------------------------------------------------------------------------
+
+      def machining_config
+        MachiningConfig.current
+      end
+
+      def machining_row(o)
+        { 'Cabinet' => o['cabinet_label'], 'Part ID' => o['part_id'], 'Kind' => o['kind'], 'Target' => o['target'],
+          'Face / edge' => o['target'] == 'face' ? o['side'].to_s.upcase : o['edge'], 'X / along' => o['target'] == 'face' ? o['x'] : o['along'],
+          'Y / z' => o['target'] == 'face' ? o['y'] : o['z'], 'Diameter' => o['dia'], 'Depth' => o['through'] ? 'through' : o['depth'],
+          'Hardware' => o['hardware_id'], 'Note' => o['note'] }
+      end
+
+      def machining_state
+        cfg = machining_config
+        res = Manufacturing::Machining.for_project(project_cabinets)
+        ops = res['ops']
+        {
+          'settings' => cfg.settings, 'patterns' => cfg.patterns, 'roles' => MachiningConfig::PATTERN_ROLES,
+          'machines' => cfg.machines, 'active' => cfg.active_machine_id, 'posts' => Manufacturing::CncPosts.list(cfg.posts),
+          'custom_posts' => cfg.posts, 'default_templates' => Manufacturing::CncPosts::DEFAULT_TEMPLATES,
+          'template_keys' => Manufacturing::CncPosts::TEMPLATE_KEYS, 'placeholders' => Manufacturing::CncPosts::PLACEHOLDERS,
+          'summary' => { 'total' => ops.size, 'face' => ops.count { |o| o['target'] == 'face' }, 'edge' => ops.count { |o| o['target'] == 'edge' },
+                         'by_kind' => ops.group_by { |o| o['kind'] }.transform_values(&:size).sort.to_h,
+                         'by_cabinet' => ops.group_by { |o| o['cabinet_label'] }.transform_values(&:size).sort.to_h },
+          'issues' => res['issues'] + Validation::MachiningChecker.check(ops)
+        }
+      end
+
+      def set_machining_setting(key, value)
+        machining_config.set_setting(key, value)
+        machining_state
+      end
+
+      def add_pattern(name, role, side, holes)
+        machining_config.add_pattern(name: name, role: role, side: side, holes: holes)
+        machining_state
+      end
+
+      def delete_pattern(id)
+        machining_config.delete_pattern(id) or raise ArgumentError, 'Unknown pattern'
+        machining_state
+      end
+
+      def select_machine(id)
+        machining_config.select_machine(id)
+        machining_state
+      end
+
+      def save_machine(raw)
+        machining_config.save_machine(raw)
+        machining_state
+      end
+
+      def delete_machine(id)
+        machining_config.delete_machine(id) or raise ArgumentError, 'Unknown machine'
+        machining_state
+      end
+
+      def save_post(id, name, templates, extension = 'nc')
+        machining_config.save_post(id: id, name: name, templates: templates, extension: extension)
+        machining_state
+      end
+
+      def delete_post(id)
+        machining_config.delete_post(id) or raise ArgumentError, 'Unknown post-processor'
+        machining_state
+      end
+
+      # Everything that would stop (errors) or qualify (warnings) a CNC export for the active machine.
+      def cnc_check(face_up = 'a')
+        cabs = project_cabinets
+        nest_res = nest
+        res = Manufacturing::Machining.for_project(cabs)
+        machine = machining_config.machine
+        issues = Manufacturing::Cnc.check(nest_res, res['ops'], machine, face_up: face_up)
+        issues += Validation::MachiningChecker.check(res['ops']).select { |i| i['severity'] == 'error' }
+        issues += nest_res['materials'].flat_map { |m| m['unplaced'].map { |u| { 'severity' => 'error', 'code' => 'nesting_failure', 'message' => "#{u['part_id']} does not fit on a sheet of #{m['material']}" } } }
+        errors = issues.count { |i| i['severity'] == 'error' }
+        { 'issues' => issues, 'errors' => errors, 'warnings' => issues.size - errors, 'exportable' => errors.zero? && !cabs.empty?, 'machine' => machine }
+      end
+
+      def cnc_preview(material, sheet_index = 0)
+        nest_res = nest
+        m = nest_res['materials'].find { |r| r['material'] == material } || nest_res['materials'].first
+        return { 'ok' => false, 'error' => 'Nothing to preview' } unless m
+
+        sh = m['sheets'][sheet_index.to_i] || m['sheets'].first
+        return { 'ok' => false, 'error' => 'No sheets' } unless sh
+
+        ops = Manufacturing::Machining.for_project(project_cabinets)['ops'].group_by { |o| o['part_uid'] }
+        holes = Manufacturing::Cnc.sheet_holes(sh, ops)
+        router = Manufacturing::Cnc.router_tool(machining_config.machine)
+        { 'ok' => true, 'material' => m['material'], 'sheet' => sh['index'], 'sheets' => m['sheets'].size, 'holes' => holes.size,
+          'svg' => Exporters::SvgExporter.sheet(m, sh, holes, router_diameter: router['diameter']) }
+      end
+
+      # One file per nested sheet: <path without extension>_<material>_sheet<N>.<ext>
+      def export_sheets(kind, path)
+        cabs = project_cabinets
+        raise ArgumentError, 'There are no cabinets to export' if cabs.empty?
+
+        nest_res = nest
+        res = Manufacturing::Machining.for_project(cabs)
+        ops_by_uid = res['ops'].group_by { |o| o['part_uid'] }
+        cfg = machining_config
+        machine = cfg.machine
+        face_up = kind == 'gcode_b' ? 'b' : 'a'
+        if kind.start_with?('gcode')
+          chk = cnc_check(face_up)
+          blockers = chk['issues'].select { |i| i['severity'] == 'error' }
+          raise ArgumentError, "G-code was not written - fix these first: #{blockers.first(3).map { |i| i['message'] }.join(' | ')}" unless blockers.empty?
+        end
+        rows = Manufacturing::PartsList.build(cabs)
+        base = path.sub(/\.[^.\/\\]+\z/, '')
+        ext = kind.start_with?('gcode') ? Manufacturing::CncPosts.extension(machine['post'], cfg.posts) : kind
+        written = []
+        nest_res['materials'].each do |m|
+          slug = m['material'].downcase.gsub(/[^a-z0-9]+/, '-').gsub(/\A-|-\z/, '')
+          thickness = rows.find { |r| r['material'] == m['material'] }['thickness']
+          sheets = m['sheets'].reject { |s| s['placements'].empty? }
+          if kind.start_with?('gcode')
+            Manufacturing::Cnc.build(m, ops_by_uid, machine, thickness, face_up: face_up).each do |prog|
+              text = Manufacturing::Cnc.render(prog, machine, cfg.posts, name: project_store.name)
+              written << write_text("#{base}_#{slug}_sheet#{prog['index'] + 1}#{face_up == 'b' ? '_underside' : ''}.#{ext}", text)
+            end
+          else
+            sheets.each do |sh|
+              holes = Manufacturing::Cnc.sheet_holes(sh, ops_by_uid)
+              text = if kind == 'dxf'
+                       Exporters::DxfExporter.sheet(m, sh, holes)
+                     else
+                       Exporters::SvgExporter.sheet(m, sh, holes, router_diameter: Manufacturing::Cnc.router_tool(machine)['diameter'])
+                     end
+              written << write_text("#{base}_#{slug}_sheet#{sh['index'] + 1}.#{ext}", text)
+            end
+          end
+        end
+        raise ArgumentError, 'Nothing to write for this export' if written.empty?
+
+        { 'ok' => true, 'paths' => written, 'path' => written.first, 'count' => written.size }
+      end
+
+      def write_text(file, text)
+        File.binwrite(file, text.encode('UTF-8'))
+        file
       end
 
       # --- Hardware library and rules ---------------------------------------------------

@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require_relative 'collision_checker'
+require_relative 'machining_checker'
+require_relative '../manufacturing/machining'
 require_relative '../core/material'
 require_relative '../core/hardware'
 require_relative '../core/edge_banding'
@@ -11,10 +13,10 @@ module CabinetCraft
     # Pure: no SketchUp calls. Every issue names the cabinet (and part) it concerns
     # so the UI can select it in the model.
     #
-    # NOT CHECKED YET (listed in NOT_CHECKED and shown to the user): drilling.
+    # NOT CHECKED (listed in NOT_CHECKED and shown to the user): machine-specific limits and tool-path simulation.
     module Validator
       LIMITS = { min_front_gap: 2.0, min_reveal: 1.0, min_runner_clearance: 10.0 }.freeze
-      NOT_CHECKED = ['Impossible drilling (machining data arrives in Phase 5)'].freeze
+      NOT_CHECKED = ['Machine travel limits, clamps / vacuum zones and tool-path simulation (not modelled)'].freeze
 
       module_function
 
@@ -31,6 +33,7 @@ module CabinetCraft
         issues = []
         cabinets.each { |c| issues.concat(check_cabinet(c)) }
         issues.concat(check_duplicates(cabinets))
+        issues.concat(check_machining(cabinets))
         issues.concat(check_nesting(nesting, cabinets)) if nesting
         issues.sort_by { |i| [i['severity'] == 'error' ? 0 : 1, i['cabinet_label'].to_s, i['code']] }
       end
@@ -39,6 +42,15 @@ module CabinetCraft
         e = issues.count { |i| i['severity'] == 'error' }
         w = issues.count { |i| i['severity'] == 'warning' }
         { 'errors' => e, 'warnings' => w, 'status' => e.positive? ? 'error' : w.positive? ? 'warning' : 'valid' }
+      end
+
+      def check_machining(cabinets)
+        res = Manufacturing::Machining.for_project(cabinets)
+        by_id = cabinets.to_h { |c| [c.id, c] }
+        res['issues'].map do |i|
+          cab = by_id[i['cabinet_id']]
+          issue(i['severity'].to_sym, i['code'], i['message'], cabinet: cab, part_key: i['part_key'])
+        end + MachiningChecker.check(res['ops'])
       end
 
       def check_cabinet(cab)

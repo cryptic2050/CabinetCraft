@@ -1,6 +1,11 @@
-# CabinetCraft Pro (Phases 1-4)
+# CabinetCraft Pro (Phases 1-5)
 
 Parametric cabinet design to manufacturing data inside SketchUp. Original code; not derived from any other plugin.
+
+**Phase 5 adds** machining data (shelf pins, hinge cups and plates, handle holes, side-mount runner holes, cam / dowel / confirmat joints,
+custom drilling patterns), drilling feasibility checks, DXF / SVG output per nested sheet, and a CNC post-processor framework:
+machine profiles with tool tables, ISO and GRBL-style posts, and user-defined text-template posts. G-code export is blocked while the
+CNC check has errors.
 
 **Phase 4 adds** sheet nesting (grain, kerf, trim, spacing; sheet preview with drag-to-move and part locks; real cut sequence when the
 layout allows it), production labels with a unique QR code per part, and a pre-production check that compares the data *and* the
@@ -40,6 +45,8 @@ Open it from the **CabinetCraft Pro** toolbar button or *Extensions > CabinetCra
 5. NESTING: set kerf/trim and press NEST MATERIAL. Drag a part to move and lock it (orange outline); click a part to rotate, unlock
    or send it to another sheet. LABELS: preview, print the HTML sheet, or paste a scanned code to find a part. PROJECT: set the
    project name and read the pre-production check; click an issue to select it.
+6. CNC: review machining data, pick or define a machine (tool table, origin, units) and post, press **Check**, then export G-code,
+   DXF or SVG (one file per sheet). **Set the nesting kerf to at least the router diameter first.**
 
 Construction profile **Standard** is self-consistent (overall height = bottom + sides). **Specification example**
 reproduces the numbers in the product brief (sides 742, back 581x695, rail 564x100); those numbers stack to 760 mm, not 757 mm,
@@ -71,13 +78,20 @@ the generator, registry, controller, undo operations and duplicate-ID repair.
   length; one sheet size per material (optional global override); leftover offcuts are not tracked; parts are only ever nested whole.
 * A manually arranged layout may not be cuttable with edge-to-edge cuts; the cut sequence is then withheld and the UI says why.
 * The cutting-list sheet count (REPORTS) remains an area estimate; NESTING shows the real placed-sheet count.
+* **G-code is generated, not verified on any machine.** Simulate and dry-run before cutting. No tabs / onion skin or hold-down logic,
+  no cutter compensation (the offset path is explicit), no tool-path simulation. Only vertical holes are machined; horizontal edge
+  bores (cam / dowel / confirmat edge holes) are listed but excluded. Face-B holes need a second program (underside), assuming the sheet
+  is turned over about its short edge (X mirrored).
+* Machining defaults (32 mm system: 37 mm setback, 5 mm pin holes, 35 mm cups at 22.5 mm, 15 mm cams at 34 mm, 128 mm handle spacing...)
+  are common values, **not** your hardware's data sheet: confirm and edit them in CNC > Drilling system.
+* Lamello / mortise-and-tenon connectors and undermount runners have no machining pattern yet (a warning says so).
 * QR codes hold a part identifier only (`CC1|<cabinet id>|<part key>`); they need an external scanner and the "Identify a part" box
   to resolve them. Drawings / assembly steps / production status behind a scan, and direct PDF output, are not implemented.
-* Validation does **not** check drilling (no machining data until Phase 5). Part-geometry edits are detected to 0.2 mm. Selecting a
+* Validation checks drilling feasibility but not machine travel limits, clamps or tool-path simulation. Part-geometry edits are detected to 0.2 mm. Selecting a
   part from an issue opens its cabinet group for editing.
 * Edge banding: finished sizes only (band thickness not deducted); fixed rules per part role, no per-edge manual editing yet.
 * Hardware: quantities and text positions only - no drilling coordinates, prices not used yet, locks are in the library but never placed automatically.
 * Handle position rules (50 mm from the free edge, 100 mm below the top), hinge inset (100 mm), connector spacing (200 mm) are my defaults - editable in HARDWARE.
 * Custom hardware is stored per user (SketchUp defaults), not inside the .skp; opening a model on another machine shows "Unknown hardware" warnings for custom items.
 * PDF export (use the printable HTML labels), editing parts in the table, and the Notes column are not implemented.
-* Manual dimension overrides, editable materials and everything in Phases 5-6 are not implemented.
+* Manual dimension overrides, editable materials and everything in Phase 6 are not implemented.

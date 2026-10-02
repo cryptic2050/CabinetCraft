@@ -34,7 +34,7 @@
     { id: 'nesting', label: 'NESTING', phase: 0 },
     { id: 'labels', label: 'LABELS', phase: 0 },
     { id: 'reports', label: 'REPORTS', phase: 0 },
-    { id: 'cnc', label: 'CNC', phase: 5, scope: 'Machining data (hinge cups, shelf pins, connectors), DXF, and a post-processor framework.' },
+    { id: 'cnc', label: 'CNC', phase: 0 },
     { id: 'settings', label: 'SETTINGS', phase: 0 }
   ];
   const S = {
@@ -42,7 +42,7 @@
     type: 'base_cabinet', params: null, editing: null, preview: null, cabinets: [], search: '', timer: null, busy: false,
     partsMode: 'project', projectRows: null, partsSearch: '', partsCabinet: '', partsMaterial: '', sort: { key: 'part_id', dir: 1 },
     cutting: null, hw: null,
-    nest: null, nestMat: 0, nestSheet: 0, nestSel: null, health: null, labels: null, lookup: null
+    cnc: null, cncCheck: null, cncPrev: null, cncFace: 'a', cncMat: '', cncSheet: 0, nest: null, nestMat: 0, nestSheet: 0, nestSel: null, health: null, labels: null, lookup: null
   };
   function load(k, d) { try { return localStorage.getItem(k) || d; } catch (e) { return d; } }
   function save(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* storage may be blocked */ } }
@@ -105,6 +105,7 @@
     else if (S.tab === 'parameters') { v.innerHTML = parametersView(); bindParameters(); paintResults(); }
     else if (S.tab === 'materials') v.innerHTML = materialsView();
     else if (S.tab === 'parts') { v.innerHTML = partsShell(); bindParts(); loadParts(); }
+    else if (S.tab === 'cnc') { v.innerHTML = '<p class="mute">Loading...</p>'; loadCnc(); }
     else if (S.tab === 'nesting') { v.innerHTML = '<p class="mute">Loading...</p>'; loadNesting(); }
     else if (S.tab === 'labels') { v.innerHTML = '<p class="mute">Loading...</p>'; loadLabels(); }
     else if (S.tab === 'reports') { v.innerHTML = '<p class="mute">Loading...</p>'; loadReports(); }
@@ -260,7 +261,7 @@
   }
   function bindExports() {
     document.querySelectorAll('[data-export]').forEach((b) => (b.onclick = () => {
-      rpc('export', [b.dataset.export, b.dataset.format]).then((r) => toast(r.cancelled ? 'Export cancelled' : 'Saved ' + r.path)).catch(showError);
+      rpc('export', [b.dataset.export, b.dataset.format]).then((r) => toast(r.cancelled ? 'Export cancelled' : r.count > 1 ? `Saved ${r.count} files, e.g. ${r.paths[0]}` : 'Saved ' + r.path)).catch(showError);
     }));
   }
 
@@ -417,6 +418,101 @@
         <button class="ghost" id="lk_sel">Select in SketchUp</button></div>`;
       $('#lk_sel').onclick = () => rpc('select_target', [r.cabinet.id, p.key]).catch(showError);
     }).catch(showError);
+  }
+
+  // ---- CNC ---------------------------------------------------------------------------------------
+  function loadCnc() {
+    rpc('nest').then((n) => { S.nest = n; return Promise.all([rpc('machining_state'), rpc('cnc_check', [S.cncFace])]); }).then(([st, chk]) => { S.cnc = st; S.cncCheck = chk; return loadCncPreview(); }).catch(showError);
+  }
+  function loadCncPreview() {
+    return rpc('cnc_preview', [S.cncMat, S.cncSheet]).then((p) => { S.cncPrev = p; paintCnc(); }).catch((e) => { S.cncPrev = null; paintCnc(); showError(e); });
+  }
+  const label = (k) => k.replace(/_/g, ' ');
+  const SET_GROUPS = [['Shelf pins', 'shelf_pin'], ['Hinges', 'hinge'], ['Handles', 'handle'], ['Runners', 'runner'], ['Cam / bolt', 'cam'], ['Bolt hole', 'bolt'], ['Dowel', 'dowel'], ['Confirmat', 'confirmat'], ['Joints', 'joint']];
+  const cncCall = (method, args, msg) => rpc(method, args).then((st) => { S.cnc = st; toast(msg || 'Saved'); return rpc('cnc_check', [S.cncFace]); }).then((c) => { S.cncCheck = c; return loadCncPreview(); }).catch(showError);
+
+  function paintCnc() {
+    const v = $('#view'); if (S.tab !== 'cnc' || !S.cnc) return; const st = S.cnc; const sm = st.summary; const chk = S.cncCheck;
+    const machine = st.machines.find((m) => m.id === st.active) || st.machines[0]; const builtIn = machine.id === 'default_router';
+    const kinds = Object.entries(sm.by_kind).map(([k, n]) => `<tr><td>${esc(label(k))}</td><td class="num">${n}</td></tr>`).join('');
+    const issueList = (list) => list.length ? `<ul class="issues">${list.map((i) => `<li class="${i.severity}"><b>${SEV[i.severity][0]}</b> ${esc(i.message)}</li>`).join('')}</ul>` : '';
+    const sel = (id, opts, cur) => `<select id="${id}">${opts.map(([val, l]) => `<option value="${esc(val)}" ${val === cur ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+    const f = (k, l, type = 'number') => `<div class="field"><label>${l}</label><input id="m_${k}" type="${type}" step="any" value="${esc(machine[k])}" ${builtIn ? 'disabled' : ''}></div>`;
+    const chkb = (k, l) => `<div class="field"><label><input id="m_${k}" type="checkbox" ${machine[k] ? 'checked' : ''} ${builtIn ? 'disabled' : ''}> ${l}</label></div>`;
+    const tools = machine.tools.map((t, i) => `<tr><td><input type="number" data-tool="number" data-i="${i}" value="${t.number}" style="width:60px" ${builtIn ? 'disabled' : ''}></td>
+      <td><select data-tool="kind" data-i="${i}" ${builtIn ? 'disabled' : ''}><option ${t.kind === 'router' ? 'selected' : ''}>router</option><option ${t.kind === 'drill' ? 'selected' : ''}>drill</option></select></td>
+      <td><input type="number" step="any" data-tool="diameter" data-i="${i}" value="${t.diameter}" style="width:80px" ${builtIn ? 'disabled' : ''}> mm</td><td>${builtIn ? '' : `<button class="ghost" data-rmtool="${i}">&times;</button>`}</td></tr>`).join('');
+    const cp = st.custom_posts; const post = cp.find((p) => p.id === S.cncPost) || cp[0];
+    const tpl = post ? post.templates : st.default_templates;
+    const settings = SET_GROUPS.map(([title, prefix]) => {
+      const keys = Object.keys(st.settings).filter((k) => k.startsWith(prefix)); if (!keys.length) return '';
+      return `<details><summary>${title.toUpperCase()}</summary><div class="fields">${keys.map((k) => `<div class="field"><label>${esc(label(k))}</label><input type="number" step="any" data-set="${k}" value="${st.settings[k]}"></div>`).join('')}</div></details>`;
+    }).join('');
+    const pats = st.patterns.map((p) => `<tr><td>${esc(p.name)}</td><td class="mute">${esc(p.role)}, face ${p.side.toUpperCase()}, ${p.holes.length} hole${p.holes.length === 1 ? '' : 's'}</td><td class="num"><button class="ghost" data-delpat="${esc(p.id)}">Delete</button></td></tr>`).join('');
+    const prev = S.cncPrev;
+    const mats = (S.nest && S.nest.materials) ? S.nest.materials.map((m) => m.material) : [];
+    v.innerHTML = `<h2>MACHINING DATA</h2><div class="card"><p><b>${sm.total}</b> operations: ${sm.face} vertical (router-capable), ${sm.edge} horizontal edge bores (need a boring head or manual drilling).</p>
+      <table>${kinds}</table></div>${issueList(st.issues)}
+      <h2>CHECK &amp; EXPORT</h2><div class="card"><div class="row" style="margin-bottom:8px"><span class="mute">Program for</span>
+      ${sel('c_face', [['a', 'Face A up (drills + cuts parts out)'], ['b', 'Face B up (underside drilling only)']], S.cncFace)}</div>
+      <span class="status ${chk.errors ? 'err' : chk.warnings ? 'warn' : 'ok'}">${chk.errors ? chk.errors + ' ERROR' + (chk.errors > 1 ? 'S' : '') : chk.warnings ? chk.warnings + ' WARNING' + (chk.warnings > 1 ? 'S' : '') : 'READY'}</span>
+      ${issueList(chk.issues)}
+      <div class="row" style="margin:10px 0"><button class="primary" data-export="${S.cncFace === 'a' ? 'gcode' : 'gcode_b'}" data-format="nc" ${chk.exportable ? '' : 'disabled'}>G-CODE</button>
+      <button class="ghost" data-export="dxf" data-format="dxf">DXF</button><button class="ghost" data-export="svg" data-format="svg">SVG</button>
+      <button class="ghost" data-export="machining" data-format="csv">Machining CSV</button><button class="ghost" data-export="machining" data-format="json">JSON</button></div>
+      <p class="mute"><b>Generated G-code is not verified on any machine.</b> Simulate and dry-run it first. No tabs or hold-downs are generated; horizontal bores are excluded. One file is written per nested sheet. DXF face-B holes are shown at their top-view positions (not mirrored).</p></div>
+      ${prev ? `<div class="row" style="margin-bottom:6px">${sel('c_mat', mats.map((m) => [m, m]), prev.material)}<span class="mute">Sheet</span><input type="number" id="c_sheet" min="1" max="${prev.sheets}" value="${prev.sheet + 1}" style="width:60px"></div>
+      <div class="card" style="padding:6px">${prev.svg}</div><p class="mute">${prev.holes} holes on this sheet: red = face A, blue dashed = face B. Orange dashes: the router path.</p>` : ''}
+      <h2>MACHINE &amp; POST-PROCESSOR</h2><div class="card"><div class="row" style="margin-bottom:8px">${sel('m_pick', st.machines.map((m) => [m.id, m.name]), st.active)}
+      <button class="ghost" id="m_del" ${builtIn ? 'disabled' : ''}>Delete</button></div>
+      <div class="fields">${f('name', 'Name', 'text')}<div class="field"><label>Post-processor</label>${sel('m_post', st.posts.map((p) => [p.id, p.name]), machine.post).replace('<select', builtIn ? '<select disabled' : '<select')}</div>
+      <div class="field"><label>Units</label>${sel('m_units', [['mm', 'mm'], ['in', 'inches']], machine.units).replace('<select', builtIn ? '<select disabled' : '<select')}</div>
+      <div class="field"><label>Origin</label>${sel('m_origin', ['bottom_left', 'bottom_right', 'top_left', 'top_right'].map((o) => [o, label(o)]), machine.origin).replace('<select', builtIn ? '<select disabled' : '<select')}</div>
+      <div class="field"><label>Z zero</label>${sel('m_z_zero', [['material_top', 'Top of material'], ['spoilboard', 'Spoilboard']], machine.z_zero).replace('<select', builtIn ? '<select disabled' : '<select')}</div>
+      ${f('spindle_rpm', 'Spindle rpm')}${f('feed_cut', 'Cutting feed (mm/min)')}${f('feed_plunge', 'Plunge feed')}${f('feed_drill', 'Drilling feed')}${f('safe_z', 'Safe height above material')}${f('pass_depth', 'Max depth per pass')}${f('cut_extra', 'Cut below material')}${f('decimals', 'Decimals')}
+      ${chkb('canned_cycles', 'Canned drilling cycles (G81)')}${chkb('line_numbers', 'Line numbers')}</div>
+      <table><thead><tr><th>TOOL</th><th>TYPE</th><th>DIAMETER</th><th></th></tr></thead><tbody>${tools}</tbody></table>
+      <div class="row" style="margin-top:8px">${builtIn ? '' : '<button class="ghost" id="m_addtool">Add tool</button><button class="primary" id="m_save">Save machine</button>'}<button class="ghost" id="m_copy">${builtIn ? 'Save as new machine' : 'Save as copy'}</button></div>
+      <p class="mute">The router tool diameter must not exceed the nesting kerf: otherwise parts cannot be cut apart (checked above). Each hole diameter needs a matching drill tool.</p></div>
+      <details><summary>CUSTOM POST-PROCESSOR (TEXT TEMPLATES)</summary><div class="card" style="margin:0;border:0">
+      <div class="row" style="margin-bottom:8px">${sel('p_pick', [['', '- new -'], ...cp.map((p) => [p.id, p.name])], post ? post.id : '')}<input id="p_name" placeholder="Name" value="${esc(post ? post.name : '')}"><input id="p_ext" placeholder="ext" value="${esc(post ? post.extension : 'nc')}" style="width:60px"></div>
+      ${st.template_keys.map((k) => `<div class="field"><label>${k}</label><textarea data-tpl="${k}" rows="${Math.min(4, (tpl[k] || '').split('\n').length + 1)}" style="width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:6px;font-family:ui-monospace,monospace">${esc(tpl[k] || '')}</textarea></div>`).join('')}
+      <div class="row"><button class="primary" id="p_save">Save post</button><button class="ghost" id="p_del" ${post ? '' : 'disabled'}>Delete</button></div>
+      <p class="mute">Placeholders: ${st.placeholders.map((p) => '{' + p + '}').join(' ')}. Assign a custom post to a machine above.</p></div></details>
+      <h2>DRILLING SYSTEM</h2>${settings}<p class="mute">Millimetres. Defaults follow a common 32 mm system: confirm them against your own hardware. Lamello / mortise joints and undermount runners have no machining pattern yet.</p>
+      <h2>CUSTOM DRILLING PATTERNS</h2><div class="card">${st.patterns.length ? `<table>${pats}</table>` : '<p class="mute">None yet.</p>'}
+      <div class="fields" style="padding:10px 0"><div class="field"><label>Name</label><input id="pt_name"></div><div class="field"><label>Applies to</label>${sel('pt_role', st.roles.map((r) => [r, label(r)]), 'shelf')}</div>
+      <div class="field"><label>Face</label>${sel('pt_side', [['a', 'A (top)'], ['b', 'B (bottom)']], 'a')}</div>
+      <div class="field" style="grid-column:1/3"><label>Holes: one per line as x, y, diameter, depth (mm from the part's min corner; x along its length)</label><textarea id="pt_holes" rows="3" style="width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:6px;font-family:ui-monospace,monospace"></textarea></div></div>
+      <button class="primary" id="pt_add">Add pattern</button></div>`;
+    bindExports();
+    $('#c_face').onchange = (e) => { S.cncFace = e.target.value; loadCnc(); };
+    if ($('#c_mat')) $('#c_mat').onchange = (e) => { S.cncMat = e.target.value; S.cncSheet = 0; loadCncPreview(); };
+    if ($('#c_sheet')) $('#c_sheet').onchange = (e) => { S.cncSheet = Math.max(0, parseInt(e.target.value, 10) - 1); loadCncPreview(); };
+    $('#m_pick').onchange = (e) => cncCall('select_machine', [e.target.value], 'Machine selected');
+    if (!builtIn) $('#m_del').onclick = () => cncCall('delete_machine', [machine.id], 'Deleted');
+    const readMachine = (id) => {
+      const g = (k) => $('#m_' + k); const o = { id, tools: [] };
+      ['name', 'spindle_rpm', 'feed_cut', 'feed_plunge', 'feed_drill', 'safe_z', 'pass_depth', 'cut_extra', 'decimals'].forEach((k) => (o[k] = g(k).value));
+      ['post', 'units', 'origin', 'z_zero'].forEach((k) => (o[k] = g(k).value)); o.canned_cycles = g('canned_cycles').checked; o.line_numbers = g('line_numbers').checked;
+      document.querySelectorAll('[data-tool][data-i]').forEach((el) => { const i = +el.dataset.i; o.tools[i] = o.tools[i] || {}; o.tools[i][el.dataset.tool] = el.value; });
+      return o;
+    };
+    if (!builtIn) {
+      $('#m_save').onclick = () => cncCall('save_machine', [readMachine(machine.id)]);
+      $('#m_addtool').onclick = () => { machine.tools.push({ number: Math.max(0, ...machine.tools.map((t) => +t.number)) + 1, kind: 'drill', diameter: 5 }); paintCnc(); };
+      document.querySelectorAll('[data-rmtool]').forEach((b) => (b.onclick = () => { machine.tools.splice(+b.dataset.rmtool, 1); paintCnc(); }));
+    }
+    $('#m_copy').onclick = () => { const o = readMachine(''); o.name = builtIn ? prompt('Name for the new machine', machine.name + ' (copy)') : machine.name + ' (copy)'; if (!o.name) return; if (builtIn) { o.tools = machine.tools.map((t) => ({ ...t })); } cncCall('save_machine', [o], 'Machine saved'); };
+    $('#p_pick').onchange = (e) => { S.cncPost = e.target.value; paintCnc(); };
+    $('#p_save').onclick = () => { const t = {}; document.querySelectorAll('[data-tpl]').forEach((el) => (t[el.dataset.tpl] = el.value)); cncCall('save_post', [post ? post.id : '', $('#p_name').value, t, $('#p_ext').value]); };
+    $('#p_del').onclick = () => post && cncCall('delete_post', [post.id], 'Deleted');
+    v.querySelectorAll('[data-set]').forEach((i) => (i.onchange = () => cncCall('set_machining_setting', [i.dataset.set, i.value])));
+    v.querySelectorAll('[data-delpat]').forEach((b) => (b.onclick = () => cncCall('delete_pattern', [b.dataset.delpat], 'Deleted')));
+    $('#pt_add').onclick = () => {
+      const holes = $('#pt_holes').value.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const [x, y, dia, depth] = l.split(/[ ,;]+/); return { x, y, dia, depth }; });
+      cncCall('add_pattern', [$('#pt_name').value, $('#pt_role').value, $('#pt_side').value, holes], 'Pattern added');
+    };
   }
 
   // ---- Hardware --------------------------------------------------------------------

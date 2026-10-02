@@ -62,6 +62,15 @@ module CabinetCraft
       axis == plane_axes[1] ? "L#{n}" : "W#{n}"
     end
 
+    # Cabinet-local point -> panel-local [lx, ly, lz]: lx along the length axis, ly along the width axis,
+    # lz through the thickness, all measured from the panel's minimum corner. Face :a is lz = thickness, :b is lz = 0.
+    def to_local(point)
+      la, wa = plane_axes
+      [point[AXES.index(la)] - origin[AXES.index(la)],
+       point[AXES.index(wa)] - origin[AXES.index(wa)],
+       point[AXES.index(thickness_axis)] - origin[AXES.index(thickness_axis)]]
+    end
+
     # Where the part sits, measured from the cabinet's left-front-bottom corner.
     def assembly_position
       "x #{origin[0].round(1)} / y #{origin[1].round(1)} / z #{origin[2].round(1)} mm"

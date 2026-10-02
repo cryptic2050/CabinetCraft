@@ -439,3 +439,94 @@ class TestScenePhase4 < Minitest::Test
     refute @c.select_target(nil)['ok']
   end
 end
+
+class TestSceneCnc < Minitest::Test
+  def setup
+    Sketchup.reset_model!
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new(CabinetCraft::Scene::SettingsStore.new('hardware_config'))
+    CabinetCraft::MachiningConfig.current = CabinetCraft::MachiningConfig.new(CabinetCraft::Scene::SettingsStore.new('machining_config'))
+    @c = CabinetCraft::Interface::Controller.new
+    @c.create('base_double_door', 'handle_type' => 'handle_bar')
+    @c.create('base_drawer_3', {})
+    @c.nest('kerf' => 8) # router is 8 mm
+  end
+
+  def test_machining_state_summarises_operations
+    st = @c.machining_state
+    assert_operator st['summary']['face'], :>, 20
+    assert_operator st['summary']['edge'], :>, 0
+    assert_equal %w[B01 B02], st['summary']['by_cabinet'].keys
+    assert_equal 'default_router', st['active']
+    JSON.generate(st)
+  end
+
+  def test_cnc_check_blocks_export_when_kerf_is_below_tool_diameter
+    @c.nest('kerf' => 4)
+    chk = @c.cnc_check
+    refute chk['exportable']
+    assert(chk['issues'].any? { |i| i['code'] == 'cnc_kerf_too_small' })
+    Dir.mktmpdir do |dir|
+      err = assert_raises(ArgumentError) { @c.export('gcode', 'nc', File.join(dir, 'job.nc')) }
+      assert_match(/not written/, err.message)
+      assert_empty Dir.children(dir)
+    end
+  end
+
+  def test_multi_file_exports_write_one_file_per_sheet
+    Dir.mktmpdir do |dir|
+      %w[dxf svg gcode].each do |kind|
+        ext = kind == 'gcode' ? 'nc' : kind
+        r = @c.export(kind, ext, File.join(dir, "job.#{ext}"))
+        assert r['ok'], kind
+        assert_operator r['count'], :>=, 1
+        assert(r['paths'].all? { |f| File.exist?(f) && f.end_with?(".#{ext}") && File.basename(f).start_with?('job_') })
+      end
+      nc = Dir.glob(File.join(dir, '*.nc')).sort
+      assert(nc.all? { |f| File.read(f).include?('NOT verified') })
+      assert(nc.any? { |f| File.read(f).include?('G81') })
+      under = @c.export('gcode_b', 'nc', File.join(dir, 'job.nc'))
+      assert(under['paths'].all? { |f| f.include?('_underside') })
+      csv = File.join(dir, 'm.csv')
+      @c.export('machining', 'csv', csv)
+      assert_match(/^Cabinet,Part ID,Kind,Target/, File.read(csv))
+    end
+  end
+
+  def test_machine_and_post_management_through_the_controller
+    st = @c.save_machine(CabinetCraft::MachiningConfig::DEFAULT_MACHINE.merge('id' => '', 'name' => 'Shop', 'post' => 'grbl', 'origin' => 'top_left'))
+    assert_equal 'machine_1', st['active']
+    Dir.mktmpdir do |dir|
+      r = @c.export('gcode', 'nc', File.join(dir, 'g.nc'))
+      assert(r['paths'].all? { |f| File.read(f).include?('M0') && !File.read(f).include?('M6') })
+    end
+    assert_raises(ArgumentError) { @c.save_machine(CabinetCraft::MachiningConfig::DEFAULT_MACHINE.merge('id' => 'default_router')) }
+    st = @c.save_post('', 'Mine', CabinetCraft::Manufacturing::CncPosts::DEFAULT_TEMPLATES, 'tap')
+    assert_equal ['post_1'], st['custom_posts'].map { |p| p['id'] }
+    assert_equal 'machine_1', @c.select_machine('machine_1')['active']
+    assert_equal 'default_router', @c.delete_machine('machine_1')['active']
+  end
+
+  def test_preview_and_patterns
+    prev = @c.cnc_preview('18mm MDF', 0)
+    assert prev['ok']
+    assert_match(/\A<svg/, prev['svg'])
+    assert_equal prev['holes'], prev['svg'].scan('<circle').size
+    st = @c.add_pattern('Cable hole', 'shelf', 'a', [{ 'x' => 100, 'y' => 60, 'dia' => 60, 'depth' => 18 }])
+    assert_equal ['Cable hole'], st['patterns'].map { |p| p['name'] }
+    assert_operator st['summary']['by_kind']['custom'], :>=, 1
+    assert_empty @c.delete_pattern('pattern_1')['patterns']
+    assert_raises(ArgumentError) { @c.delete_pattern('pattern_9') }
+  end
+
+  def test_settings_persist_across_new_config_instances
+    @c.set_machining_setting('hinge_cup_edge', 21.5)
+    again = CabinetCraft::MachiningConfig.new(CabinetCraft::Scene::SettingsStore.new('machining_config'))
+    assert_equal 21.5, again.settings['hinge_cup_edge']
+    assert_equal 22.5, CabinetCraft::MachiningConfig.new(CabinetCraft::Scene::SettingsStore.new('hardware_config')).settings['hinge_cup_edge'] # separate key
+  end
+
+  def test_validation_includes_drilling_through_the_scene
+    @c.create('base_cabinet', 'material' => 'ply_12', 'connector_type' => 'cam_lock')
+    assert(@c.validate['issues'].any? { |i| i['code'] == 'impossible_drilling' })
+  end
+end

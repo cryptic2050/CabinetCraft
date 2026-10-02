@@ -59,3 +59,4 @@ select{background:var(--panel2);color:var(--text);border:1px solid var(--line);b
 .lbl .lt{flex:1;min-width:0}.lbl .lq{width:76px;flex:none}.lbl .lq svg{width:100%;height:auto;display:block}
 .mono{font-family:ui-monospace,Menlo,Consolas,monospace}
 .issues li.pick{cursor:pointer}.issues li.pick:hover{filter:brightness(1.25)}
+.card svg{max-width:100%;height:auto}

@@ -74,6 +74,20 @@ module CabinetCraft
       end
     end
 
+    # Fixings along a joint of the given length: one every `spacing` mm, at least 2.
+    def connector_count(length, spacing)
+      [2, (length / spacing).ceil].max
+    end
+
+    # Evenly spaced positions along a joint (distances from its start), kept away from the ends.
+    def joint_positions(length, count, inset)
+      inset = [inset, length / 4.0].min
+      return [length / 2.0] if count == 1
+
+      step = (length - 2 * inset) / (count - 1)
+      Array.new(count) { |i| (inset + i * step).round(3) }
+    end
+
     # Joints: [owner part key, joint length]. Fixings sit on the owner part.
     def joints(values, panels)
       keys = panels.map(&:key)
@@ -89,7 +103,7 @@ module CabinetCraft
       type = params['connector_type']
       per_part = Hash.new(0)
       joints(values, panels).each do |key, length|
-        per_part[key] += [2, (length / st['connector_spacing']).ceil].max
+        per_part[key] += connector_count(length, st['connector_spacing'])
       end
       companions = Hardware.find(type)&.companions || {}
       per_part.each do |key, qty|

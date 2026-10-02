@@ -155,7 +155,8 @@ class TestLabelsAndValidation < Minitest::Test
     assert_equal 'warning', V.summary(V.run([cab('edge_front' => 0)]))['status']
   end
 
-  def test_not_checked_list_is_honest
-    assert_match(/drilling/i, V::NOT_CHECKED.join)
+  def test_not_checked_list_is_honest # lists what is still NOT verified
+    refute_match(/drilling/i, V::NOT_CHECKED.join) # drilling is checked now
+    assert_match(/simulation/i, V::NOT_CHECKED.join)
   end
 end

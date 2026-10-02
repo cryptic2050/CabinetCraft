@@ -111,16 +111,17 @@ class TestPhase3 < Minitest::Test
     assert(r.all? { |h| h['detail'].include?('500') })
   end
 
-  def test_connectors_scale_with_joint_length_and_cam_needs_dowels
+  def test_connectors_scale_with_joint_length_and_cam_needs_a_bolt
     c = cab('shelf_count' => 0, 'door_count' => 0)
     cams = c.hardware.select { |h| h['hardware_id'] == 'cam_lock' }.sum { |h| h['qty'] }
-    dowels = c.hardware.select { |h| h['hardware_id'] == 'dowel' }.sum { |h| h['qty'] }
+    bolts = c.hardware.select { |h| h['hardware_id'] == 'cam_bolt' }.sum { |h| h['qty'] }
     assert_operator cams, :>=, 10
-    assert_equal cams, dowels
+    assert_equal cams, bolts
     deep = cab('depth' => 800, 'shelf_count' => 0, 'door_count' => 0)
     assert_operator deep.hardware.select { |h| h['hardware_id'] == 'cam_lock' }.sum { |h| h['qty'] }, :>, cams
     conf = cab('connector_type' => 'confirmat').hardware
-    assert(conf.none? { |h| h['hardware_id'] == 'dowel' })
+    assert(conf.none? { |h| %w[dowel cam_bolt].include?(h['hardware_id']) })
+    refute_includes CabinetCraft::Parameter.schema.find { |f| f['key'] == 'connector_type' }['options'].map { |o| o['value'] }, 'cam_bolt'
   end
 
   def test_shelf_pins_four_per_shelf

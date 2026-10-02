@@ -88,6 +88,26 @@ equally. When drawers fill the cabinet, shelves/dividers are ignored *with a war
   geometry, scaled cabinets, missing/wrong IDs, overlapping cabinets). Every issue carries cabinet/part so the UI can select it;
   selecting a part opens its cabinet for editing.
 
+## Phase 5: machining, DXF, CNC
+
+* **Machining data** (`manufacturing/machining.rb`): drilling operations derived from parameters in *panel-local* coordinates
+  (x along the part length, y along its width from the min corner; face `a` = max side of the thickness axis, `b` = min side; edge
+  bores carry an edge code L1/L2/W1/W2 and a position along it). Implemented: shelf pins, hinge cups + plate holes, handle holes,
+  side-mount runner holes, cam / dowel / confirmat joints, user-defined patterns. Joint counts and positions come from the same
+  functions as the hardware list, and a test asserts both always agree. Not implemented (reported as warnings, never skipped
+  silently): lamello / mortise slots, undermount and other runner patterns, runner holes on the drawer box.
+* **Feasibility** (`validation/machining_checker.rb`): holes outside the part, blind holes that leave < 2 mm, bores too large for the
+  board, overlapping holes. Through-holes are an explicit intent (handles, confirmat clearance), never inferred from depth.
+* **CNC** (`manufacturing/cnc.rb`, `cnc_posts.rb`, `core/machining_config.rb`): machine profiles (units, origin, Z zero, feeds, tool
+  table), a neutral event list, and posts: ISO (G81), GRBL-style (operator pauses, no canned cycles) and user-defined text-template
+  posts (`{x} {y} {z} ...`, validated against a placeholder whitelist). Programs drill by tool (nearest-neighbour order) then cut
+  outlines in passes with an explicitly offset path. The checker blocks G-code export on errors (missing drill tool, router wider than
+  the nesting kerf, impossible drilling, unplaced parts). **Output is not verified on any machine**; every file says so.
+* **Verification**: tests run the generated G-code text through a small interpreter and compare drilled positions / depths / tools,
+  cut loops, origins, units, Z conventions and "no rapid XY inside the material" against an independent expectation. DXF files are
+  parsed with ezdxf (dev only) and compared hole for hole.
+* **Not generated**: tabs / onion skin, cutter compensation, horizontal boring, helical holes, simulation.
+
 ## Folder layout
 
 ```
@@ -95,13 +115,13 @@ cabinetcraft/
   cabinetcraft_pro.rb            loader (registers the extension)
   CabinetCraft/
     main.rb                      toolbar + menu
-    core/        units parameter material construction rules panel cabinet library edge_banding hardware hardware_rules
+    core/        units parameter material construction rules panel cabinet library edge_banding hardware hardware_rules machining_config
     generators/  panel_generator (pure)  cabinet_generator (SketchUp geometry)
     scene/       attributes registry settings_store project_store model_checker
-    manufacturing/ parts_list cutting_list nesting cut_sequence labels
-    exporters/   csv_exporter json_exporter label_html
+    manufacturing/ parts_list cutting_list nesting cut_sequence labels machining cnc cnc_posts
+    exporters/   csv_exporter json_exporter label_html dxf_exporter svg_exporter
     utilities/   qr_code
-    validation/  validator collision_checker
+    validation/  validator collision_checker machining_checker
     ui/          controller dialog dashboard.html/.css/.js
     resources/   cabinet.svg
     libraries/   (empty: reserved for later phases)
@@ -139,6 +159,11 @@ cabinetcraft/
 | 4 | QR opening drawings, assembly steps, production status | PLANNED |
 | 4 | Pre-production validation with click-to-select | IMPLEMENTED (drilling check not possible until Phase 5) |
 | 4 | Direct PDF output (labels, nesting, cutting list) | PLANNED |
-| 5-6 | machining, DXF, CNC, templates, standards, costs, assembly | PLANNED |
+| 5 | Machining data: shelf pins, hinge cups/plates, handles, runners (side-mount), cam/dowel/confirmat, custom patterns | IMPLEMENTED |
+| 5 | Drilling feasibility checks (in the pre-production validation) | IMPLEMENTED |
+| 5 | DXF R12 per nested sheet; SVG; machining CSV / JSON | IMPLEMENTED (DXF verified with ezdxf) |
+| 5 | CNC: machines + tool tables, ISO / GRBL / custom template posts, G-code per sheet, face-B underside program | IMPLEMENTED (unverified on real machines; no tabs) |
+| 5 | Lamello / mortise machining, undermount runner holes, horizontal boring output, tabs, G41/G42, simulation | PLANNED |
+| 6 | templates, standards, costs, assembly | PLANNED |
 | - | All other library cabinets (wall, tall, wardrobe, vanity, TV, corner...) | PLANNED - listed, not selectable |
 | - | PLACEHOLDER | none: no control exists that does nothing |
