@@ -74,6 +74,7 @@ module CabinetCraft
 
       def initialize(store = MemoryStore.new)
         @store = store
+        @prices = {} # id => unit price (built-in and custom items alike)
         @custom = []
         @hinge_rules = DEFAULT_HINGE_RULES.map(&:dup)
         @settings = DEFAULT_SETTINGS.dup
@@ -82,6 +83,29 @@ module CabinetCraft
 
       def custom_items
         @custom.dup
+      end
+
+      def price_of(id)
+        return @prices[id] if @prices.key?(id)
+
+        @custom.find { |i| i.id == id }&.price
+      end
+
+      # Blank removes the price. Prices are unit prices, never negative.
+      def set_price(id, value)
+        raise ArgumentError, 'Unknown hardware' unless BUILT_IN.any? { |i| i.id == id } || @custom.any? { |i| i.id == id }
+
+        if value.nil? || value.to_s.strip.empty?
+          @prices.delete(id)
+        else
+          v = Float(value)
+          raise ArgumentError, 'Price must be between 0 and 1,000,000' unless v.between?(0, 1_000_000)
+
+          @prices[id] = v
+        end
+        save
+      rescue TypeError
+        raise ArgumentError, 'Price must be a number'
       end
 
       def add_custom(name:, category:, price: nil, supplier: nil)
@@ -138,7 +162,7 @@ module CabinetCraft
       private
 
       def save
-        @store.write(JSON.generate('custom' => @custom.map(&:to_h), 'hinge_rules' => @hinge_rules, 'settings' => @settings))
+        @store.write(JSON.generate('custom' => @custom.map(&:to_h), 'hinge_rules' => @hinge_rules, 'settings' => @settings, 'prices' => @prices))
       end
 
       def load
@@ -150,11 +174,13 @@ module CabinetCraft
           Item.new(id: h['id'], name: h['name'], category: h['category'], price: h['price'], supplier: h['supplier'],
                    custom: true, companions: {})
         end
+        @prices = (data['prices'] || {}).select { |_, v| v.is_a?(Numeric) && v >= 0 }
         self.hinge_rules = data['hinge_rules'] if data['hinge_rules']
         @settings = DEFAULT_SETTINGS.merge((data['settings'] || {}).select { |k, _| DEFAULT_SETTINGS.key?(k) })
       rescue JSON::ParserError, ArgumentError, TypeError, KeyError
         # Corrupt settings must never break the plugin: fall back to defaults.
         @custom = []
+        @prices = {}
         @hinge_rules = DEFAULT_HINGE_RULES.map(&:dup)
         @settings = DEFAULT_SETTINGS.dup
       end
@@ -180,6 +206,10 @@ module CabinetCraft
       end
 
       # Name for display; unknown ids (e.g. custom item missing on this machine) stay visible.
+      def price_of(id)
+        config.price_of(id)
+      end
+
       def name_of(id)
         find(id)&.name || "Unknown hardware (#{id})"
       end

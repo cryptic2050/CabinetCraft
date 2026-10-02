@@ -98,6 +98,68 @@ module CabinetCraft
         pg.text(x + LABEL_W - qr / 2 - 1.5, y + LABEL_H - 2, 'scan to identify', size: 4.5, align: :center, color: '555555')
       end
 
+      def money(cur, v)
+        s = format('%.2f', v)
+        s = s.sub(/(\d)(?=(\d{3})+\.)/, '\\1,') while s.match?(/\d{4}\./)
+        "#{cur}#{s}"
+      end
+
+      # est: Controller#cost_estimate (enabled). INTERNAL: shows costs and margin.
+      def costing(est, project:, created: Time.now.utc)
+        r = PdfReport.new(title: 'Cost estimate (internal)', project: project, created: created)
+        c = est['currency']
+        m = ->(v) { money(c, v) }
+        r.paragraph('Internal document: it shows costs and margin. Use the quotation for clients. All figures are estimates.')
+        r.heading('Summary', size: 11)
+        r.table([left('Item', 60), right("Amount (#{c})", 30)], [
+                  ['Materials', m.call(est['materials_total'])], ['Edge banding', m.call(est['edge_total'])], ['Hardware', m.call(est['hardware_total'])],
+                  ["CNC (#{est['cnc']['sheets']} sheets, #{est['cnc']['holes']} holes)", m.call(est['cnc']['cost'])],
+                  ["Labour (#{num(est['labour']['hours'])} h)", m.call(est['labour']['cost'])], ['Manufacturing cost', m.call(est['manufacturing_cost'])],
+                  ['Transport', m.call(est['transport'])], ['Installation', m.call(est['installation'])], ['TOTAL COST', m.call(est['total_cost'])],
+                  ["Profit margin #{num(est['margin_pct'])}% of the selling price", m.call(est['profit'])], ['SELLING PRICE', m.call(est['selling_price'])]
+                ])
+        r.heading('Materials', size: 11)
+        r.table([left('Material', 50), right('Sheets', 14), right('Per sheet', 20), right('Cost', 22), left('Basis', 40)],
+                est['materials'].map { |l| [l['material'], l['sheets'].to_s, l['sheet_price'] ? m.call(l['sheet_price']) : 'NOT PRICED', m.call(l['cost']), l['basis']] })
+        unless est['edge_banding'].empty?
+          r.heading('Edge banding', size: 11)
+          r.table([left('Thickness', 24), right('Metres', 18), right('With waste', 22), right('Per metre', 22), right('Cost', 22)],
+                  est['edge_banding'].map { |l| ["#{num(l['thickness'])} mm", num(l['metres']), num(l['metres_with_waste']), m.call(l['price_per_m']), m.call(l['cost'])] })
+        end
+        unless est['hardware'].empty?
+          r.heading('Hardware', size: 11)
+          r.table([left('Item', 70), right('Qty', 12), right('Unit price', 22), right('Cost', 22)],
+                  est['hardware'].map { |l| [l['name'], l['qty'].to_s, l['unit_price'] ? m.call(l['unit_price']) : 'NOT PRICED', m.call(l['cost'])] })
+        end
+        r.heading('Per cabinet', size: 11)
+        r.table([left('Cabinet', 18), right('Materials', 18), right('Edge', 14), right('Hardware', 18), right('CNC', 14), right('Labour', 16), right('Cost', 18), right('Price', 18)],
+                est['per_cabinet'].map { |x| [x['label'], m.call(x['material']), m.call(x['edge_banding']), m.call(x['hardware']), m.call(x['cnc']), m.call(x['labour']), m.call(x['cost']), m.call(x['price'])] })
+        r.paragraph('Per-cabinet figures include allocated shares of installation, transport and CNC. Materials and CNC sheets are shared by part area, transport by volume.')
+        unless est['warnings'].empty?
+          r.heading('Warnings', size: 11)
+          est['warnings'].each { |w| r.paragraph(w, color: 'aa5500') }
+        end
+        r.render
+      end
+
+      # CLIENT-FACING: selling prices only. No costs, margin or manufacturing detail.
+      def quote(est, project:, cabinets:, created: Time.now.utc, type_names: {})
+        r = PdfReport.new(title: 'Quotation', project: project, created: created)
+        c = est['currency']
+        r.paragraph("Estimate for #{project}, prepared #{created.strftime('%Y-%m-%d')}. Prices are estimates based on the current design.", color: '000000')
+        by_id = cabinets.to_h { |x| [x.id, x] }
+        rows = est['per_cabinet'].map do |x|
+          cab = by_id[x['cabinet_id']]
+          dims = x['width'] && x['height'] && x['depth'] ? "#{num(x['width'])} x #{num(x['height'])} x #{num(x['depth'])} mm" : ''
+          mat = cab&.part_rows&.first&.fetch('material', nil)
+          [x['label'], type_names[x['type']] || x['type'], [dims, mat].reject { |t| t.to_s.empty? }.join('  |  '), money(c, x['price'])]
+        end
+        r.table([left('Item', 12), left('Cabinet', 40), left('Details', 70), right("Price (#{c})", 24)], rows, size: 8.5, row_h: 6.5)
+        r.spacer(2)
+        r.heading("Total: #{money(c, est['selling_price'])}", size: 13)
+        r.render
+      end
+
       def hue_color(label)
         h = label.to_s.each_char.reduce(0) { |a, c| (a * 31 + c.ord) % 360 }
         s = 0.45

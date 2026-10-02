@@ -184,6 +184,9 @@ cabinetcraft/
 | 5 | DXF R12 per nested sheet; SVG; machining CSV / JSON | IMPLEMENTED (DXF verified with ezdxf) |
 | 5 | CNC: machines + tool tables, ISO / GRBL / custom template posts, G-code per sheet, face-B underside program | IMPLEMENTED (unverified on real machines; no tabs) |
 | 5 | Lamello / mortise machining, undermount runner holes, horizontal boring output, tabs, G41/G42, simulation | PLANNED |
-| 6 | templates, standards, costs, assembly | PLANNED |
+| 6 | Template creator (safe expression parser, JSON templates, presets) | IMPLEMENTED |
+| 6 | Company standards (manufacturing defaults, applied to new cabinets) | IMPLEMENTED |
+| 6 | Cost estimation (`manufacturing/costing.rb`: materials by nested sheets or area, edge banding, hardware unit prices, CNC, labour, installation, transport, margin; per-cabinet allocation that sums exactly to the totals; internal costing PDF/CSV/JSON and client quote PDF with selling prices only; COSTS tab) | IMPLEMENTED |
+| 6 | Assembly documentation (steps, exploded view, assembly PDF) | PLANNED |
 | - | All other library cabinets (wall, tall, wardrobe, vanity, TV, corner...) | PLANNED - listed, not selectable |
 | - | PLACEHOLDER | none: no control exists that does nothing |

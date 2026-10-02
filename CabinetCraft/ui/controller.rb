@@ -17,6 +17,7 @@ require_relative '../manufacturing/nesting'
 require_relative '../manufacturing/labels'
 require_relative '../manufacturing/machining'
 require_relative '../manufacturing/cnc'
+require_relative '../manufacturing/costing'
 require_relative '../exporters/dxf_exporter'
 require_relative '../exporters/pdf_reports'
 require_relative '../exporters/svg_exporter'
@@ -40,6 +41,7 @@ module CabinetCraft
                           advanced_parts set_override reset_overrides
                           library_state templates_state validate_template save_template delete_template install_example
                           save_preset delete_preset standards_state save_standards reset_standards
+                          cost_state save_cost_settings set_hardware_price
                           machining_state set_machining_setting add_pattern delete_pattern select_machine save_machine
                           delete_machine save_post delete_post cnc_check cnc_preview].freeze
 
@@ -47,7 +49,7 @@ module CabinetCraft
       EXPORTS = { 'parts' => %w[csv excel_csv json pdf], 'cutting_list' => %w[csv excel_csv json pdf],
                   'hardware' => %w[csv excel_csv json], 'project' => %w[json],
                   'nesting' => %w[csv excel_csv json pdf], 'labels' => %w[pdf html csv excel_csv json],
-                  'machining' => %w[csv excel_csv json], 'dxf' => %w[dxf], 'svg' => %w[svg], 'gcode' => %w[nc], 'gcode_b' => %w[nc] }.freeze
+                  'machining' => %w[csv excel_csv json], 'costing' => %w[csv excel_csv json pdf], 'quote' => %w[pdf], 'dxf' => %w[dxf], 'svg' => %w[svg], 'gcode' => %w[nc], 'gcode_b' => %w[nc] }.freeze
       EXTENSIONS = { 'csv' => 'csv', 'excel_csv' => 'csv', 'json' => 'json', 'html' => 'html', 'pdf' => 'pdf', 'dxf' => 'dxf', 'svg' => 'svg', 'nc' => 'nc' }.freeze
       MULTI_FILE = %w[dxf svg gcode gcode_b].freeze # one file per nested sheet
 
@@ -250,6 +252,37 @@ module CabinetCraft
         { 'library' => library_entries, 'schemas' => template_schemas, 'planned' => Library::PLANNED, 'standards' => standards_summary }
       end
 
+      # --- Cost estimation ---------------------------------------------------------------------
+
+      def cost_settings
+        Manufacturing::Costing.normalize(project_store.cost_settings)
+      end
+
+      def cost_estimate
+        cabs = project_cabinets
+        settings = cost_settings
+        return { 'enabled' => false } unless settings['enabled']
+
+        ops = Manufacturing::Machining.for_project(cabs)['ops']
+        Manufacturing::Costing.estimate(cabs, cabs.empty? ? nil : nest, ops, settings)
+      end
+
+      def cost_state
+        thick = project_cabinets.flat_map(&:panels).flat_map { |p| p.edges.values }.uniq.sort.map { |v| format('%.1f', v) }
+        { 'settings' => cost_settings, 'estimate' => cost_estimate, 'edge_thicknesses' => thick, 'cabinet_count' => project_cabinets.size }
+      end
+
+      def save_cost_settings(raw)
+        clean = Manufacturing::Costing.normalize(raw)
+        in_operation('CabinetCraft: Cost settings', reidentify: false) { project_store.cost_settings = clean }
+        cost_state
+      end
+
+      def set_hardware_price(id, price)
+        Hardware.config.set_price(id, price)
+        hardware_state
+      end
+
       # --- Factory standards -----------------------------------------------------------------------
 
       def standards_state
@@ -412,6 +445,9 @@ module CabinetCraft
         raise ArgumentError, "Folder does not exist: #{File.dirname(path)}" unless Dir.exist?(File.dirname(path))
         return export_sheets(kind, path) if MULTI_FILE.include?(kind)
 
+        if %w[costing quote].include?(kind) && !cost_settings['enabled']
+          raise ArgumentError, 'Cost calculations are switched off for this project (COSTS tab)'
+        end
         content = format == 'pdf' ? render_pdf(kind) : render_export(kind, format)
         File.binwrite(path, format == 'pdf' ? content : content.encode('UTF-8'))
         { 'ok' => true, 'path' => path, 'bytes' => content.bytesize }
@@ -428,6 +464,8 @@ module CabinetCraft
         when 'cutting_list' then Exporters::PdfReports.cutting_list(Manufacturing::CuttingList.build(cabs), project: project)
         when 'labels' then Exporters::PdfReports.labels(Manufacturing::Labels.build(cabs, project_name: project, qr: false), project: project)
         when 'nesting' then Exporters::PdfReports.nesting(nest, project: project)
+        when 'costing' then Exporters::PdfReports.costing(cost_estimate, project: project)
+        when 'quote' then Exporters::PdfReports.quote(cost_estimate, project: project, cabinets: cabs, type_names: Library.entries.to_h { |e| [e['type'], e['name']] })
         else raise ArgumentError, "#{kind} cannot be exported as pdf"
         end
       end
@@ -457,6 +495,11 @@ module CabinetCraft
           when 'json' then Exporters::JsonExporter.data(list.map { |l| l.reject { |k, _| k == 'qr_svg' } })
           else csv.call(list, Manufacturing::Labels::COLUMNS)
           end
+        when 'costing'
+          est = cost_estimate
+          rows = est['per_cabinet'].map { |c| { 'Cabinet' => c['label'], 'Parts' => c['parts'], 'Materials' => c['material'], 'Edge banding' => c['edge_banding'], 'Hardware' => c['hardware'],
+                                                'CNC' => c['cnc'], 'Labour' => c['labour'], 'Installation' => c['installation'], 'Transport' => c['transport'], 'Cost' => c['cost'], 'Price' => c['price'] } }
+          format == 'json' ? Exporters::JsonExporter.data(est) : csv.call(rows, (rows.first || { 'Cabinet' => 0 }).keys.map { |k| [k, k] })
         when 'machining'
           ops = Manufacturing::Machining.for_project(cabs)['ops']
           rows = ops.map { |o| machining_row(o) }
@@ -769,7 +812,7 @@ module CabinetCraft
       def hardware_state
         cfg = Hardware.config
         {
-          'library' => Hardware.all.map(&:to_h), 'categories' => Hardware::CATEGORIES,
+          'library' => Hardware.all.map { |h| h.to_h.merge('price' => Hardware.price_of(h.id)) }, 'categories' => Hardware::CATEGORIES,
           'hinge_rules' => cfg.hinge_rules, 'settings' => cfg.settings, 'schema' => Parameter.schema
         }
       end

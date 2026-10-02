@@ -60,6 +60,15 @@ module CabinetCraft
         @model.set_attribute(DICT, 'templates_snapshot', JSON.generate(hash))
       end
 
+      # Costing inputs are per project (prices change quote by quote).
+      def cost_settings
+        read_json('cost_settings')
+      end
+
+      def cost_settings=(hash)
+        @model.set_attribute(DICT, 'cost_settings', JSON.generate(hash))
+      end
+
       private
 
       def read_json(key)

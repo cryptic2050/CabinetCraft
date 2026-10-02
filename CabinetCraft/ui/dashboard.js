@@ -36,6 +36,7 @@
     { id: 'labels', label: 'LABELS', phase: 0 },
     { id: 'reports', label: 'REPORTS', phase: 0 },
     { id: 'cnc', label: 'CNC', phase: 0 },
+    { id: 'costs', label: 'COSTS', phase: 0 },
     { id: 'settings', label: 'SETTINGS', phase: 0 }
   ];
   const S = {
@@ -168,6 +169,7 @@
     else if (S.tab === 'nesting') { v.innerHTML = '<p class="mute">Loading...</p>'; loadNesting(); }
     else if (S.tab === 'labels') { v.innerHTML = '<p class="mute">Loading...</p>'; loadLabels(); }
     else if (S.tab === 'reports') { v.innerHTML = '<p class="mute">Loading...</p>'; loadReports(); }
+    else if (S.tab === 'costs') { v.innerHTML = '<p class="mute">Loading...</p>'; loadCosts(); }
     else if (S.tab === 'hardware') { v.innerHTML = '<p class="mute">Loading...</p>'; loadHardware(); }
     else if (S.tab === 'project') { v.innerHTML = projectView(); bindProject(); }
     else if (S.tab === 'settings') { v.innerHTML = settingsView(); bindSettings(); }
@@ -595,7 +597,7 @@
     const lib = Object.entries(h.categories).map(([cat, label]) => {
       const items = h.library.filter((i) => i.category === cat); if (!items.length) return '';
       return `<h2>${esc(label.toUpperCase())}</h2><div class="card"><table>${items.map((i) => `<tr><td>${esc(i.name)}${i.custom ? ' <span class="badge impl">CUSTOM</span>' : ''}</td>
-        <td class="mute">${i.price != null ? i.price : ''} ${esc(i.supplier || '')}</td><td class="num">${i.custom ? `<button class="ghost" data-del="${esc(i.id)}">Delete</button>` : ''}</td></tr>`).join('')}</table></div>`;
+        <td class="mute"><input type="number" step="any" min="0" placeholder="unit price" data-price="${esc(i.id)}" value="${i.price != null ? i.price : ''}" style="width:100px"> ${esc(i.supplier || '')}</td><td class="num">${i.custom ? `<button class="ghost" data-del="${esc(i.id)}">Delete</button>` : ''}</td></tr>`).join('')}</table></div>`;
     }).join('');
     const rules = h.hinge_rules.map((r, i) => `<tr><td>door height &ge;</td><td><input type="number" data-rule="min_height" data-i="${i}" value="${toDisp(r.min_height)}" ${i === 0 ? 'disabled' : ''} style="width:90px"> ${S.unit}</td>
       <td>hinges <input type="number" data-rule="count" data-i="${i}" value="${r.count}" min="1" max="10" style="width:60px"></td><td>${i ? `<button class="ghost" data-rmrule="${i}">&times;</button>` : ''}</td></tr>`).join('');
@@ -612,9 +614,10 @@
       <div class="field"><label>Unit price (optional)</label><input id="hw_price" type="number" step="any" min="0"></div>
       <div class="field"><label>Supplier (optional)</label><input id="hw_sup"></div></div>
       <div class="row" style="padding:0 12px 12px"><button class="primary" id="hw_add">Add</button></div></div>
-      <p class="mute">Custom hinges, runners, connectors, handles and legs appear in the PARAMETERS dropdowns. Prices are stored but not used until costing (Phase 6). Locks have no automatic placement yet.</p>
+      <p class="mute">Custom hinges, runners, connectors, handles and legs appear in the PARAMETERS dropdowns. Unit prices (editable in the LIBRARY below) feed the COSTS tab. Locks have no automatic placement yet.</p>
       <h2>LIBRARY</h2>${lib}`;
     v.querySelectorAll('[data-del]').forEach((b) => (b.onclick = () => hwCall('delete_hardware', [b.dataset.del])));
+    v.querySelectorAll('[data-price]').forEach((i) => (i.onchange = () => hwCall('set_hardware_price', [i.dataset.price, i.value])));
     v.querySelectorAll('[data-set]').forEach((i) => (i.onchange = () => hwCall('set_hardware_setting', [i.dataset.set, i.value])));
     $('#hw_add').onclick = () => hwCall('add_hardware', [$('#hw_name').value, $('#hw_cat').value, $('#hw_price').value, $('#hw_sup').value]);
     const readRules = () => h.hinge_rules.map((r, i) => ({
@@ -622,6 +625,53 @@
     $('#saverules').onclick = () => hwCall('set_hinge_rules', [readRules()]);
     $('#addrule').onclick = () => { const r = readRules(); r.push({ min_height: (r[r.length - 1].min_height || 0) + 300, count: r[r.length - 1].count + 1 }); S.hw.hinge_rules = r; paintHardware(); };
     v.querySelectorAll('[data-rmrule]').forEach((b) => (b.onclick = () => { const r = readRules(); r.splice(+b.dataset.rmrule, 1); S.hw.hinge_rules = r; paintHardware(); }));
+  }
+
+
+  // ---- Costs ---------------------------------------------------------------------------------------
+  function loadCosts() { rpc('cost_state').then((c) => { S.costs = c; paintCosts(); }).catch(showError); }
+  function paintCosts() {
+    const v = $('#view'); const c = S.costs; if (S.tab !== 'costs' || !c) return;
+    const st = c.settings; const e = c.estimate; const cur = esc(st.currency);
+    const m = (n) => (n == null ? '' : Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+    const num = (k, label, hint) => `<div class="field"><label>${label}</label><input type="number" step="any" min="0" data-cs="${k}" value="${st[k]}">${hint ? `<span class="mute">${hint}</span>` : ''}</div>`;
+    const edgeInputs = ['default'].concat(c.edge_thicknesses).map((t) => `<div class="field"><label>Edge band ${t === 'default' ? '(any other thickness)' : t + ' mm'} per metre</label><input type="number" step="any" min="0" data-edge="${t === 'default' ? 'default' : t}" value="${st.edge_prices[t === 'default' ? 'default' : parseFloat(t).toFixed(1)] ?? ''}"></div>`).join('');
+    const form = `<h2>COST SETTINGS</h2><div class="card"><div class="fields">
+      <div class="field"><label>Calculate costs for this project</label><select data-cs="enabled"><option value="true" ${st.enabled ? 'selected' : ''}>On</option><option value="false" ${st.enabled ? '' : 'selected'}>Off</option></select></div>
+      <div class="field"><label>Currency symbol</label><input data-cs="currency" maxlength="3" value="${esc(st.currency)}"></div>
+      <div class="field"><label>Material cost based on</label><select data-cs="material_basis"><option value="nesting" ${st.material_basis === 'nesting' ? 'selected' : ''}>Nested sheets (what you buy)</option><option value="area" ${st.material_basis === 'area' ? 'selected' : ''}>Part area + waste</option></select></div>
+      ${num('waste_pct', 'Waste % (area basis only)')}${edgeInputs}${num('edge_waste_pct', 'Edge band waste %')}
+      ${num('cnc_per_sheet', 'CNC cost per sheet')}${num('cnc_per_hole', 'CNC cost per drilled hole')}
+      ${num('labour_rate', 'Labour rate per hour')}${num('labour_hours_per_cabinet', 'Labour hours per cabinet')}${num('labour_minutes_per_part', 'Labour minutes per part')}
+      ${num('installation_per_cabinet', 'Installation per cabinet')}${num('transport', 'Transport (whole project)', 'shared by cabinet volume')}${num('margin_pct', 'Profit margin % of selling price', 'must be under 95')}</div>
+      <div class="row" style="padding:0 12px 12px"><button class="primary" id="cs_save">Save &amp; calculate</button></div>
+      <p class="mute">Settings are stored in this model. Material prices are set in MATERIALS, hardware unit prices in HARDWARE. Anything without a price is listed as a warning rather than counted as free.</p></div>`;
+    if (!e.enabled) { v.innerHTML = `<h2>COSTS <span class="badge warnb">OFF</span></h2>${form}`; bindCosts(); return; }
+    if (!c.cabinet_count) { v.innerHTML = `<h2>COSTS</h2><p class="mute">Create cabinets first.</p>${form}`; bindCosts(); return; }
+    const rows = (arr, cols) => `<table><tr>${cols.map((x) => `<th>${x[0]}</th>`).join('')}</tr>${arr.map((r) => `<tr>${cols.map((x) => `<td class="${x[2] || ''}">${x[1](r)}</td>`).join('')}</tr>`).join('')}</table>`;
+    const n = 'num';
+    const mats = rows(e.materials, [['Material', (r) => esc(r.material)], ['Sheets', (r) => r.sheets, n], ['Unit price', (r) => m(r.unit_price), n], ['Basis', (r) => esc(r.basis)], ['Cost', (r) => m(r.cost), n]]);
+    const edges = e.edge_banding.length ? rows(e.edge_banding, [['Thickness', (r) => r.thickness + ' mm'], ['Metres', (r) => r.metres, n], ['With waste', (r) => r.metres_with_waste, n], ['Per metre', (r) => m(r.price_per_m), n], ['Cost', (r) => m(r.cost), n]]) : '<p class="mute">No edge banding.</p>';
+    const hw = e.hardware.length ? rows(e.hardware, [['Item', (r) => esc(r.name)], ['Qty', (r) => r.qty, n], ['Unit price', (r) => (r.unit_price == null ? '-' : m(r.unit_price)), n], ['Cost', (r) => m(r.cost), n]]) : '<p class="mute">No hardware.</p>';
+    const per = rows(e.per_cabinet, [['Cabinet', (r) => esc(r.label)], ['Materials', (r) => m(r.material), n], ['Edge', (r) => m(r.edge_banding), n], ['Hardware', (r) => m(r.hardware), n], ['CNC', (r) => m(r.cnc), n],
+      ['Labour', (r) => m(r.labour), n], ['Install', (r) => m(r.installation), n], ['Transport', (r) => m(r.transport), n], ['Cost', (r) => m(r.cost), n], ['Price', (r) => m(r.price), n]]);
+    const warn = e.warnings.length ? `<ul class="issues">${e.warnings.map((w) => `<li class="warning">${esc(w)}</li>`).join('')}</ul>` : '';
+    const line = (l, val, b) => `<tr><td>${b ? '<b>' + l + '</b>' : l}</td><td class="num">${b ? '<b>' + cur + ' ' + m(val) + '</b>' : cur + ' ' + m(val)}</td></tr>`;
+    const sum = `<div class="card"><table>${line('Materials', e.materials_total)}${line('Edge banding', e.edge_total)}${line('Hardware', e.hardware_total)}${line('CNC', e.cnc.cost)}${line(`Labour (${e.labour.hours} h)`, e.labour.cost)}
+      ${line('Installation', e.installation)}${line('Transport', e.transport)}${line('Total cost', e.total_cost, true)}${line(`Profit (${st.margin_pct}% of price)`, e.profit)}${line('Selling price', e.selling_price, true)}</table></div>`;
+    v.innerHTML = `<h2>COSTS</h2>${warn}${sum}<h2>EXPORT</h2>${exportButtons('costing')}<div class="row"><span class="mute">Client quote (selling prices only, no costs or margin):</span><button class="ghost" data-export="quote" data-format="pdf">Quote PDF</button></div>
+      <h2>PER CABINET</h2><div class="card">${per}</div><h2>MATERIALS</h2><div class="card">${mats}</div><h2>EDGE BANDING</h2><div class="card">${edges}</div><h2>HARDWARE</h2><div class="card">${hw}</div>${form}
+      <p class="mute">An estimate, not a quote you can rely on blindly: it uses your prices and the nesting heuristic (not proven optimal). Check the figures before sending them to a client.</p>`;
+    bindExports(); bindCosts();
+  }
+  function bindCosts() {
+    const b = $('#cs_save'); if (!b) return;
+    b.onclick = () => {
+      const raw = { edge_prices: {} };
+      document.querySelectorAll('[data-cs]').forEach((i) => { const k = i.dataset.cs; raw[k] = k === 'enabled' ? i.value === 'true' : (['currency', 'material_basis'].includes(k) ? i.value : i.value === '' ? 0 : parseFloat(i.value)); });
+      document.querySelectorAll('[data-edge]').forEach((i) => { if (i.value !== '') raw.edge_prices[i.dataset.edge] = parseFloat(i.value); });
+      rpc('save_cost_settings', [raw]).then((r) => { S.costs = r; paintCosts(); toast('Saved'); }).catch(showError);
+    };
   }
 
   // ---- Templates (custom parametric cabinets) ---------------------------------------------------------

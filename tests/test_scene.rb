@@ -1081,3 +1081,78 @@ class TestSceneStandards < Minitest::Test
     assert_equal 100.0, @c.standards_state['hardware_settings']['hinge_inset']
   end
 end
+
+class TestCostingScene < Minitest::Test
+  def setup
+    Sketchup.reset_model!
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    CabinetCraft::Material.config = CabinetCraft::MaterialConfig.new
+    @c = CabinetCraft::Interface::Controller.new
+    @c.create('base_double_door', {})
+    @c.create('base_drawer_3', {})
+    @c.set_project_name('VALENTINA KITCHEN')
+  end
+
+  def test_cost_state_defaults_and_warnings_for_unpriced_items
+    s = @c.cost_state
+    assert_equal 2, s['cabinet_count']
+    assert_equal true, s['settings']['enabled']
+    assert_equal 2, s['estimate']['per_cabinet'].size
+    assert_match(/No price set/, s['estimate']['warnings'].join)
+    assert_equal 0.0, s['estimate']['total_cost']
+  end
+
+  def test_settings_persist_in_the_model_and_drive_the_estimate
+    @c.set_hardware_price('hinge_standard', 4)
+    @c.save_cost_settings('labour_rate' => 30, 'labour_hours_per_cabinet' => 1, 'margin_pct' => 40, 'transport' => 50)
+    again = CabinetCraft::Interface::Controller.new # same model, new controller
+    st = again.cost_state
+    assert_equal 40.0, st['settings']['margin_pct']
+    e = st['estimate']
+    assert_operator e['labour']['cost'], :>=, 60.0
+    assert_in_delta e['total_cost'], e['per_cabinet'].sum { |x| x['cost'] }, 0.0001
+    assert_in_delta e['total_cost'] / 0.6, e['selling_price'], 0.011
+  end
+
+  def test_invalid_settings_are_rejected_and_nothing_is_saved
+    assert_raises(ArgumentError) { @c.save_cost_settings('margin_pct' => 120) }
+    assert_equal 25.0, @c.cost_state['settings']['margin_pct']
+  end
+
+  def test_hardware_prices_show_in_hardware_state
+    st = @c.set_hardware_price('hinge_standard', 3.25)
+    assert_equal 3.25, st['library'].find { |h| h['id'] == 'hinge_standard' }['price']
+    assert_raises(ArgumentError) { @c.set_hardware_price('hinge_standard', -3) }
+  end
+
+  def test_disabled_costing_blocks_cost_exports
+    @c.save_cost_settings('enabled' => false)
+    assert_equal({ 'enabled' => false }, @c.cost_state['estimate'])
+    Dir.mktmpdir do |dir|
+      %w[costing quote].each do |k|
+        err = assert_raises(ArgumentError) { @c.export(k, 'pdf', File.join(dir, "#{k}.pdf")) }
+        assert_match(/switched off/, err.message)
+      end
+      assert_empty Dir.children(dir)
+    end
+  end
+
+  def test_cost_exports_and_quote_never_leak_cost_or_margin
+    @c.set_hardware_price('hinge_standard', 3)
+    @c.save_cost_settings('margin_pct' => 33, 'edge_prices' => { 'default' => 1.0 })
+    Dir.mktmpdir do |dir|
+      %w[csv excel_csv json pdf].each do |fmt|
+        res = @c.export('costing', fmt, File.join(dir, "costing.#{fmt}"))
+        assert res['ok'], fmt
+      end
+      assert_in_delta @c.cost_estimate['selling_price'], JSON.parse(File.read(File.join(dir, 'costing.json')))['rows']['selling_price'], 0.0001
+      path = File.join(dir, 'quote.pdf')
+      assert @c.export('quote', 'pdf', path)['ok']
+      bytes = File.binread(path)
+      assert bytes.start_with?('%PDF-1.4'.b)
+      assert_includes bytes, 'VALENTINA'.b
+      %w[margin Margin profit Profit Total\ cost].each { |w| refute_includes bytes, w.b, w }
+      assert File.size(File.join(dir, 'costing.pdf')) > 500
+    end
+  end
+end
