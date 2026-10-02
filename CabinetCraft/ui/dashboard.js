@@ -29,6 +29,7 @@
     { id: 'cabinets', label: 'CABINETS', phase: 0 },
     { id: 'templates', label: 'TEMPLATES', phase: 0 },
     { id: 'runs', label: 'RUNS', phase: 0 },
+    { id: 'corners', label: 'CORNERS', phase: 0 },
     { id: 'parameters', label: 'PARAMETERS', phase: 0 },
     { id: 'materials', label: 'MATERIALS', phase: 0 },
     { id: 'hardware', label: 'HARDWARE', phase: 0 },
@@ -172,6 +173,7 @@
     else if (S.tab === 'labels') { v.innerHTML = '<p class="mute">Loading...</p>'; loadLabels(); }
     else if (S.tab === 'reports') { v.innerHTML = '<p class="mute">Loading...</p>'; loadReports(); }
     else if (S.tab === 'runs') { paintRuns(); }
+    else if (S.tab === 'corners') { paintCorners(); }
     else if (S.tab === 'assembly') { v.innerHTML = '<p class="mute">Loading...</p>'; loadAssembly(); }
     else if (S.tab === 'costs') { v.innerHTML = '<p class="mute">Loading...</p>'; loadCosts(); }
     else if (S.tab === 'hardware') { v.innerHTML = '<p class="mute">Loading...</p>'; loadHardware(); }
@@ -726,6 +728,121 @@
         return;
       }
       S.linked = res.runs; paintLinked(); refreshList(); toast('Run resized');
+    }).catch(showError);
+  }
+
+
+  // ---- Corners (two walls, corner cabinet, two runs) -----------------------------------------------------
+  const KIND_LABEL = { none: 'No corner cabinet (run A starts in the corner)', blind: 'Blind corner cabinet', l_shaped: 'L-shaped corner cabinet' };
+  function cornerState() {
+    if (!S.corner) {
+      const it = (type) => ({ type, fixed: false, width: '', min: 300, max: 900 });
+      S.corner = { wall_a: 3000, wall_b: 2400, depth: 560, clearance: 20, kind: 'none', ctype: '', cwidth: 900, cwa: 900, cwb: 900,
+        run_a: [it('base_single_door'), it('base_drawer_3'), it('base_double_door')], run_b: [it('base_single_door'), it('base_double_door')], plan: null, layouts: null };
+    }
+    return S.corner;
+  }
+  function cornerSpec() {
+    const c = cornerState();
+    const items = (list) => list.map((i) => ({ type: i.type, fixed: i.fixed, width: i.fixed && i.width !== '' ? i.width : null, min: i.min, max: i.max }));
+    const corner = c.kind === 'blind' ? { type: c.ctype, width: c.cwidth } : c.kind === 'l_shaped' ? { type: c.ctype, width_a: c.cwa, width_b: c.cwb } : {};
+    return { wall_a: c.wall_a, wall_b: c.wall_b, depth: c.depth, clearance: c.clearance, kind: c.kind, corner, run_a: items(c.run_a), run_b: items(c.run_b) };
+  }
+  function cornerTypes() {
+    const t = S.boot.library.filter((e) => e.user === 'template');
+    const corner = t.filter((e) => e.category === 'CORNER');
+    return corner.length ? corner : t;
+  }
+  function sideRows(list, side) {
+    return list.map((it, n) => `<tr><td class="num">${n + 1}</td>
+      <td><select data-cf="type" data-side="${side}" data-n="${n}">${S.boot.library.map((e) => `<option value="${esc(e.type)}" ${e.type === it.type ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}</select></td>
+      <td><label><input type="checkbox" data-cf="fixed" data-side="${side}" data-n="${n}" ${it.fixed ? 'checked' : ''}> fixed</label></td>
+      <td><input type="number" step="any" data-cf="width" data-side="${side}" data-n="${n}" value="${it.width === '' ? '' : toDisp(it.width)}" placeholder="auto" ${it.fixed ? '' : 'disabled'} style="width:75px"></td>
+      <td><input type="number" step="any" data-cf="min" data-side="${side}" data-n="${n}" value="${toDisp(it.min)}" ${it.fixed ? 'disabled' : ''} style="width:65px"></td>
+      <td><input type="number" step="any" data-cf="max" data-side="${side}" data-n="${n}" value="${toDisp(it.max)}" ${it.fixed ? 'disabled' : ''} style="width:65px"></td>
+      <td><button class="ghost" data-cdel="${side}:${n}">&times;</button></td></tr>`).join('');
+  }
+  function paintCorners() {
+    const v = $('#view'); const c = cornerState(); const types = cornerTypes();
+    const num = (k, label) => `<div class="field"><label>${label} (${S.unit})</label><input type="number" step="any" data-cn="${k}" value="${toDisp(c[k])}"></div>`;
+    const cornerFields = c.kind === 'none' ? '' : `<div class="field"><label>Corner cabinet</label><select data-cn="ctype">${types.length ? types.map((e) => `<option value="${esc(e.type)}" ${e.type === c.ctype ? 'selected' : ''}>${esc(e.name)}</option>`).join('') : '<option value="">(none installed)</option>'}</select></div>`
+      + (c.kind === 'blind' ? num('cwidth', 'Corner cabinet width') : num('cwa', 'Arm A length') + num('cwb', 'Arm B length'));
+    const install = (c.kind !== 'none' && !types.length) ? `<div class="row" style="padding:0 12px 12px"><button class="primary" id="cn_install">Install the corner cabinet templates</button><span class="mute">Adds an L-shaped and a blind corner base to your template library.</span></div>` : '';
+    v.innerHTML = `<h2>CORNERS</h2><p class="mute">Plan two walls that meet at 90&deg;: wall A runs along the model's X axis, wall B along Y, with the room corner at the layout origin. Cabinets stand in front of the walls with their backs against them. Door swing and handles are not checked; the clearance only keeps run B off the door of run A's end cabinet. Lengths are in ${S.unit}.</p>
+      <div class="card"><div class="fields">${num('wall_a', 'Wall A length')}${num('wall_b', 'Wall B length')}${num('depth', 'Cabinet depth')}${num('clearance', 'Clearance')}
+        <div class="field"><label>Corner</label><select data-cn="kind">${Object.entries(KIND_LABEL).map(([k, l]) => `<option value="${k}" ${k === c.kind ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></div>${cornerFields}</div>${install}
+      <h3 style="padding:0 12px">Run along wall A</h3><table style="margin:0 12px"><tr><th>#</th><th>Cabinet</th><th></th><th>Width</th><th>Min</th><th>Max</th><th></th></tr>${sideRows(c.run_a, 'a')}</table>
+      <div class="row" style="padding:6px 12px"><button class="ghost" data-cadd="a">Add cabinet</button></div>
+      <h3 style="padding:0 12px">Run along wall B</h3><table style="margin:0 12px"><tr><th>#</th><th>Cabinet</th><th></th><th>Width</th><th>Min</th><th>Max</th><th></th></tr>${sideRows(c.run_b, 'b')}</table>
+      <div class="row" style="padding:6px 12px 12px"><button class="ghost" data-cadd="b">Add cabinet</button></div>
+      <div class="row" style="padding:0 12px 12px"><button class="ghost" id="cn_plan">Calculate</button><button class="primary" id="cn_create">Create layout in model</button></div></div>
+      <div id="cn_result"></div><h2>CORNER LAYOUTS</h2><div id="cn_layouts"><p class="mute">Loading...</p></div>`;
+    bindCorners(); paintCornerPlan(); loadCornerLayouts();
+  }
+  function planViewSvg(p) {
+    if (!p.rects.length) return '';
+    const xs = p.rects.flatMap((r) => [r[1], r[3]]); const ys = p.rects.flatMap((r) => [r[2], r[4]]);
+    const x1 = Math.max(...xs, p.layout.depth + 100); const y1 = Math.max(...ys, p.layout.depth + 100); const pad = Math.max(x1, y1) * 0.04; const fs = Math.max(x1, y1) / 45;
+    const flip = (y) => (y1 - y + pad);
+    const body = p.rects.map(([label, ax0, ay0, ax1, ay1]) => {
+      const kind = label.startsWith('corner') ? '#c66a3a' : label.startsWith('a') ? '#a98458' : '#6a8aa9';
+      return `<g><rect x="${ax0 + pad}" y="${flip(ay1)}" width="${ax1 - ax0}" height="${ay1 - ay0}" fill="${kind}" stroke="#222" stroke-width="${fs / 12}"/><text x="${(ax0 + ax1) / 2 + pad}" y="${flip((ay0 + ay1) / 2) + fs / 3}" font-size="${fs}" text-anchor="middle" fill="#fff" font-family="sans-serif">${esc(label)}</text></g>`;
+    }).join('');
+    const walls = `<line x1="${pad}" y1="${flip(0)}" x2="${x1 + pad}" y2="${flip(0)}" stroke="#eee" stroke-width="${fs / 3}"/><line x1="${pad}" y1="${flip(0)}" x2="${pad}" y2="${flip(y1)}" stroke="#eee" stroke-width="${fs / 3}"/>`;
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${x1 + 2 * pad} ${y1 + 2 * pad}" width="100%" style="max-height:380px;background:#1c1f25;border:1px solid var(--line,#444)" role="img" aria-label="Plan view of the corner layout">${walls}${body}</svg>`;
+  }
+  function paintCornerPlan() {
+    const el = $('#cn_result'); const c = cornerState(); const p = c.plan; if (!el || !p) return;
+    el.innerHTML = `<div class="card"><h3>Plan ${p.ok ? '<span class="badge impl">FITS</span>' : '<span class="badge warnb">DOES NOT FIT</span>'}</h3>${p.layout ? planViewSvg(p) : ''}
+      ${p.layout ? `<p class="mute">Run A: ${fmt(p.layout.a.start)} to ${fmt(p.layout.a.start + p.layout.a.length)} &middot; widths ${p.run_a ? p.run_a.widths.map(fmt).join(' + ') : 'none'}<br>
+      Run B: ${fmt(p.layout.b.start)} to ${fmt(p.layout.b.start + p.layout.b.length)} &middot; widths ${p.run_b ? p.run_b.widths.map(fmt).join(' + ') : 'none'}</p>` : ''}
+      ${p.issues.length ? `<ul class="issues">${p.issues.map((m) => `<li class="warning">${esc(m)}</li>`).join('')}</ul>` : ''}
+      ${p.overlaps.length ? `<ul class="issues">${p.overlaps.map((o) => `<li class="error">${esc(o[0])} overlaps ${esc(o[1])}</li>`).join('')}</ul>` : ''}</div>`;
+  }
+  function readCorners() {
+    const c = cornerState();
+    document.querySelectorAll('[data-cn]').forEach((i) => { const k = i.dataset.cn; c[k] = ['kind', 'ctype'].includes(k) ? i.value : fromDisp(i.value); });
+    document.querySelectorAll('[data-cf]').forEach((i) => {
+      const it = c['run_' + i.dataset.side][+i.dataset.n]; const k = i.dataset.cf;
+      it[k] = k === 'type' ? i.value : k === 'fixed' ? i.checked : (i.value === '' ? '' : fromDisp(i.value));
+    });
+    if (c.kind !== 'none' && !c.ctype) { const t = cornerTypes(); if (t.length) c.ctype = t[0].type; }
+  }
+  function bindCorners() {
+    const c = cornerState();
+    document.querySelectorAll('[data-cn],[data-cf]').forEach((i) => (i.onchange = () => { readCorners(); c.plan = null; paintCorners(); }));
+    document.querySelectorAll('[data-cadd]').forEach((b) => (b.onclick = () => { readCorners(); c['run_' + b.dataset.cadd].push({ type: 'base_cabinet', fixed: false, width: '', min: 300, max: 900 }); c.plan = null; paintCorners(); }));
+    document.querySelectorAll('[data-cdel]').forEach((b) => (b.onclick = () => { readCorners(); const [side, n] = b.dataset.cdel.split(':'); c['run_' + side].splice(+n, 1); c.plan = null; paintCorners(); }));
+    const inst = $('#cn_install'); if (inst) inst.onclick = () => Promise.all([rpc('install_example', ['l_shaped_corner_base']), rpc('install_example', ['blind_corner_base'])])
+      .then(() => rpc('bootstrap')).then((b) => { S.boot.library = b.library; S.boot.schemas = b.schemas; readCorners(); paintCorners(); toast('Corner templates installed'); }).catch(showError);
+    $('#cn_plan').onclick = () => { readCorners(); rpc('plan_corner', [cornerSpec()]).then((p) => { c.plan = p; paintCornerPlan(); }).catch(showError); };
+    $('#cn_create').onclick = () => { readCorners(); rpc('create_corner_layout', [cornerSpec()]).then((res) => { c.plan = res.plan; paintCornerPlan(); refreshList(); loadCornerLayouts(); toast('Corner layout created'); }).catch(showError); };
+  }
+  function loadCornerLayouts() { rpc('layouts_state').then((r) => { cornerState().layouts = r.layouts; paintCornerLayouts(); }).catch(showError); }
+  function paintCornerLayouts() {
+    const el = $('#cn_layouts'); if (!el || S.tab !== 'corners') return;
+    const ls = cornerState().layouts || [];
+    if (!ls.length) { el.innerHTML = '<p class="mute">No layouts yet. A layout you create is remembered here, so you can change either wall length later and both runs resize.</p>'; return; }
+    el.innerHTML = ls.map((l) => {
+      const runLine = (r, name) => (r ? `${name}: ${r.name} ${r.in_sync ? '<span class="badge impl">IN SYNC</span>' : '<span class="badge warnb">OUT OF SYNC</span>'} widths ${r.members.map((m) => (m.width == null ? '?' : fmt(m.width))).join(' + ')}` : `${name}: none`);
+      return `<div class="card" data-layout="${esc(l.id)}"><h3>${esc(l.name)} <span class="mute">${esc(KIND_LABEL[l.kind] || l.kind)}</span> <span class="badge ${l.in_sync ? 'impl' : 'warnb'}">${l.in_sync ? 'IN SYNC' : 'OUT OF SYNC'}</span></h3>
+        <div class="row"><label class="mute">Wall A (${S.unit})</label><input type="number" step="any" data-lwa value="${toDisp(l.wall_a)}" style="width:100px"><label class="mute">Wall B (${S.unit})</label><input type="number" step="any" data-lwb value="${toDisp(l.wall_b)}" style="width:100px">
+        <button class="primary" data-lre="${esc(l.id)}">Re-plan &amp; resize</button><button class="ghost" data-lun="${esc(l.id)}">Unlink</button></div>
+        <p class="mute">${l.corner ? `Corner cabinet ${l.corner.present ? esc(l.corner.label) : '<b>deleted</b>'}<br>` : ''}${runLine(l.run_a, 'Wall A')}<br>${runLine(l.run_b, 'Wall B')}</p><div data-lpending></div></div>`;
+    }).join('') + '<p class="mute">Re-plan resizes the runs of both walls in one undo step; the corner cabinet keeps its size (edit it normally and re-plan). Unlinking keeps all cabinets and runs. Deleted cabinets cannot be restored: unlink and create the layout again.</p>';
+    el.querySelectorAll('[data-lre]').forEach((b) => (b.onclick = () => restretchLayout(b.dataset.lre, null)));
+    el.querySelectorAll('[data-lun]').forEach((b) => (b.onclick = () => rpc('unlink_layout', [b.dataset.lun]).then((r) => { cornerState().layouts = r.layouts; paintCornerLayouts(); toast('Layout unlinked; cabinets kept'); }).catch(showError)));
+  }
+  function restretchLayout(id, mode) {
+    const card = document.querySelector(`[data-layout="${id}"]`);
+    rpc('restretch_layout', [id, fromDisp(card.querySelector('[data-lwa]').value), fromDisp(card.querySelector('[data-lwb]').value), mode]).then((res) => {
+      if (res.needs_confirmation) {
+        card.querySelector('[data-lpending]').innerHTML = `<div class="card" style="border-color:var(--warn)"><h3>This resize affects manual overrides</h3><ul style="margin:6px 0 10px 16px;padding:0">${res.affected.map((a) => `<li><b>${esc(a.part_id)}</b> ${esc(a.field)} is manually set to <b>${fmt(a.override)}</b>; the automatic value would change ${fmt(a.auto_old)} &rarr; ${fmt(a.auto_new)} ${S.unit}.</li>`).join('')}</ul>
+          <div class="row"><button class="primary" data-lmode="keep">Keep my overrides</button><button class="ghost" data-lmode="reset">Reset them to AUTO</button><button class="ghost" data-lmode="cancel">Cancel</button></div><p class="mute">Nothing has been changed yet.</p></div>`;
+        card.querySelectorAll('[data-lmode]').forEach((b) => (b.onclick = () => (b.dataset.lmode === 'cancel' ? paintCornerLayouts() : restretchLayout(id, b.dataset.lmode))));
+        return;
+      }
+      loadCornerLayouts(); refreshList(); toast('Layout resized');
     }).catch(showError);
   }
 

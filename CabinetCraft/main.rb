@@ -5,7 +5,7 @@ require 'sketchup.rb'
 %w[
   core/units core/material core/material_config core/construction core/hardware core/parameter core/rules core/edge_banding core/panel core/overrides
   templates/expression templates/template templates/examples templates/registry
-  core/run_planner core/run core/hardware_rules core/standards core/library core/cabinet
+  core/run_planner core/run core/corner_layout core/hardware_rules core/standards core/library core/cabinet
   generators/panel_generator generators/cabinet_generator
   manufacturing/parts_list manufacturing/cutting_list manufacturing/cut_sequence manufacturing/nesting manufacturing/labels
   exporters/csv_exporter exporters/json_exporter exporters/label_html utilities/qr_code
@@ -13,7 +13,7 @@ require 'sketchup.rb'
   exporters/dxf_exporter exporters/svg_exporter exporters/pdf_writer exporters/pdf_reports
   validation/collision_checker validation/machining_checker validation/validator
   scene/attributes scene/registry scene/settings_store scene/project_store scene/explode scene/model_checker
-  ui/controller ui/dialog
+  ui/layout_commands ui/controller ui/dialog
 ].each { |f| require File.join(CabinetCraft::PLUGIN_ROOT, f) }
 
 module CabinetCraft

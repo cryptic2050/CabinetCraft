@@ -190,6 +190,8 @@ cabinetcraft/
 | 6 | Assembly documentation (`manufacturing/assembly.rb` steps and exploded geometry, `scene/explode.rb` reversible part offsets stored per part, SVG and vector PDF drawings, ASSEMBLY tab) | IMPLEMENTED |
 | 7 | Cabinet runs with Smart Space fill (`core/run_planner.rb`, RUNS tab): fixed and flexible cabinets sized to fill a wall exactly, one-undo-step creation | IMPLEMENTED |
 | 7 | Linked runs (`core/run.rb`, `ProjectStore#runs`): stored in the model, Quick Stretch re-plans and resizes members in one undo step, pinned cabinets, in-sync / resized / moved / missing status, unlink | IMPLEMENTED |
-| 7 | Corner logic, filler-strip cabinets, adding or removing cabinets in an existing run | PLANNED |
+| 8 | Corner logic (`core/corner_layout.rb`, `ui/layout_commands.rb`, CORNERS tab): two walls at 90 degrees, a corner of kind none / blind / L-shaped, a linked run along each wall (run B is turned 90 degrees), plan-view drawing, create and re-plan both runs in one undo step, layouts remembered in the model | IMPLEMENTED |
+| 8 | Corner cabinet templates (L-shaped corner base, blind corner base) installable from the template library | IMPLEMENTED |
+| 8 | Outside corners, walls that are not at 90 degrees, door swing / handle clearance checks, mirrored (right-hand) layouts, changing the corner kind of an existing layout, wall cabinets and tall units in a corner, filler-strip cabinets, adding or removing cabinets in an existing run | PLANNED |
 | - | All other library cabinets (wall, tall, wardrobe, vanity, TV, corner...) | PLANNED - listed, not selectable |
 | - | PLACEHOLDER | none: no control exists that does nothing |

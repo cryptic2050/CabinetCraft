@@ -20,6 +20,7 @@ require_relative '../manufacturing/cnc'
 require_relative '../manufacturing/costing'
 require_relative '../core/run_planner'
 require_relative '../core/run'
+require_relative 'layout_commands'
 require_relative '../manufacturing/assembly'
 require_relative '../exporters/assembly_svg'
 require_relative '../exporters/dxf_exporter'
@@ -38,6 +39,8 @@ module CabinetCraft
     # UI-independent command layer. The dialog forwards JSON calls here; tests
     # call it directly. Every public method returns a JSON-safe Hash.
     class Controller
+      include LayoutCommands
+
       PUBLIC_METHODS = %w[bootstrap preview create update select list parts_list cutting_list hardware_state
                           add_hardware delete_hardware set_hinge_rules set_hardware_setting
                           project_state set_project_name nest nest_lock nest_lock_current nest_unlock nest_unlock_all
@@ -48,6 +51,7 @@ module CabinetCraft
                           save_preset delete_preset standards_state save_standards reset_standards
                           cost_state save_cost_settings set_hardware_price
                           assembly_state explode_cabinet assemble_cabinet plan_run create_run runs_state restretch_run unlink_run
+                          plan_corner create_corner_layout layouts_state unlink_layout restretch_layout
                           machining_state set_machining_setting add_pattern delete_pattern select_machine save_machine
                           delete_machine save_post delete_post cnc_check cnc_preview].freeze
 
@@ -420,7 +424,7 @@ module CabinetCraft
       def run_summary(run)
         plan = (run.plan rescue nil) # rubocop:disable Style/RescueModifier
         found = run.items.map { |i| Scene::Registry.find(model, i['cabinet_id']) }
-        base = found.first&.first&.then { |g| Units.from_sketchup(g.bounds.min.x) } # positions are judged against the first cabinet
+        base = found.first&.first&.then { |g| along(g, run.axis) } # positions are judged against the first cabinet
         x = 0.0
         members = run.items.each_with_index.map do |item, n|
           group, cab = found[n]
@@ -429,13 +433,13 @@ module CabinetCraft
           x += expected_w.to_f
           status = if cab.nil? then 'missing'
                    elsif expected_w && (cab.params['width'].to_f - expected_w).abs > 0.01 then 'resized'
-                   elsif expected_x && (Units.from_sketchup(group.bounds.min.x) - expected_x).abs > 0.5 then 'moved'
+                   elsif expected_x && (along(group, run.axis) - expected_x).abs > 0.5 then 'moved'
                    else 'ok'
                    end
           { 'n' => n + 1, 'cabinet_id' => item['cabinet_id'], 'label' => cab&.label, 'type' => cab&.type, 'fixed' => item['fixed'], 'min' => item['min'], 'max' => item['max'],
             'width' => cab&.params&.fetch('width', nil), 'expected_width' => expected_w, 'status' => status }
         end
-        { 'id' => run.id, 'name' => run.name, 'length' => run.length, 'members' => members, 'in_sync' => members.all? { |m| m['status'] == 'ok' },
+        { 'id' => run.id, 'name' => run.name, 'length' => run.length, 'axis' => run.axis, 'members' => members, 'in_sync' => members.all? { |m| m['status'] == 'ok' },
           'leftover' => plan && plan['leftover'], 'fits' => plan ? plan['ok'] : false }
       end
 
@@ -455,6 +459,17 @@ module CabinetCraft
       # rules: index-aligned [{ 'fixed' => bool, 'width' => mm, 'min' => mm, 'max' => mm }] (partial hashes allowed).
       # mode: 'keep' / 'reset' decides what happens to manual overrides a new width would change (as in `update`).
       def restretch_run(run_id, length, rules = nil, mode = nil)
+        job = restretch_job(run_id, length, rules, mode)
+        return job if job.key?('needs_confirmation')
+
+        in_operation('CabinetCraft: Resize run', reidentify: false) { apply_restretch(job) }
+        { 'ok' => true, 'updated' => true, 'plan' => job[:plan], 'runs' => runs_state['runs'] }
+      end
+
+      # Everything needed to resize one run, with no model changes. Returns a Hash reply (with 'needs_confirmation') when manual
+      # overrides would change and the caller has not chosen keep / reset; raises ArgumentError for impossible requests.
+      # base: where the first cabinet should start along the run's axis (mm); defaults to where it is now.
+      def restretch_job(run_id, length, rules, mode, base: nil)
         run = stored_runs.find { |r| r.id == run_id } or raise ArgumentError, 'That run no longer exists'
         rules = rules&.each_with_index&.map { |r, n| fixed_with_current_width(run, r, n) }
         updated = run.with(length: length, rules: rules)
@@ -463,17 +478,17 @@ module CabinetCraft
 
         members = updated.items.map { |i| Scene::Registry.find(model, i['cabinet_id']) }
         missing = members.each_index.select { |n| members[n].nil? }
-        raise ArgumentError, "Cabinet #{missing.first + 1} of this run is no longer in the model: unlink the run and create it again" if missing.any?
+        raise ArgumentError, "Cabinet #{missing.first + 1} of #{run.name} is no longer in the model: unlink the run and create it again" if missing.any?
 
         prepared = stretch_prepare(members, plan['widths'], mode)
         return prepared if prepared.is_a?(Hash)
 
-        base = Units.from_sketchup(members.first[0].bounds.min.x)
-        in_operation('CabinetCraft: Resize run', reidentify: false) do
-          stretch_apply(prepared, base)
-          save_run(updated)
-        end
-        { 'ok' => true, 'updated' => true, 'plan' => plan, 'runs' => runs_state['runs'] }
+        { run: updated, plan: plan, prepared: prepared, base: base || along(members.first[0], updated.axis) }
+      end
+
+      def apply_restretch(job)
+        stretch_apply(job[:prepared], job[:base], job[:run].axis)
+        save_run(job[:run])
       end
 
       # Making a cabinet fixed without giving a width pins it at the width it has now.
@@ -506,13 +521,21 @@ module CabinetCraft
         out
       end
 
-      def stretch_apply(prepared, base)
-        x = base
+      # Position (mm) of a group's minimum corner along a model axis ('x' or 'y').
+      def along(group, axis)
+        Units.from_sketchup(axis == 'y' ? group.bounds.min.y : group.bounds.min.x)
+      end
+
+      def stretch_apply(prepared, base, axis = 'x')
+        pos = base
         prepared.each do |group, new_cab, width|
           Generators::CabinetGenerator.rebuild(group, new_cab) if new_cab
-          delta = x - Units.from_sketchup(group.bounds.min.x)
-          group.transform!(Geom::Transformation.translation(Geom::Vector3d.new(Units.to_sketchup(delta), 0, 0))) if delta.abs > 1e-6
-          x += width
+          delta = Units.to_sketchup(pos - along(group, axis))
+          if delta.abs > 1e-9
+            vec = axis == 'y' ? Geom::Vector3d.new(0, delta, 0) : Geom::Vector3d.new(delta, 0, 0)
+            group.transform!(Geom::Transformation.translation(vec))
+          end
+          pos += width
         end
         snapshot_materials
       end

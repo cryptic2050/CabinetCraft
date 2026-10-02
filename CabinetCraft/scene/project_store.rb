@@ -78,6 +78,15 @@ module CabinetCraft
         @model.set_attribute(DICT, 'runs', JSON.generate(hash))
       end
 
+      # Corner layouts: { layout_id => layout hash } (see CornerLayout::Record).
+      def layouts
+        read_json('layouts')
+      end
+
+      def layouts=(hash)
+        @model.set_attribute(DICT, 'layouts', JSON.generate(hash))
+      end
+
       private
 
       def read_json(key)

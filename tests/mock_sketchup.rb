@@ -27,20 +27,45 @@ module Geom
       @y = y.to_f
       @z = z.to_f
     end
+
+    def to_a
+      [x, y, z]
+    end
   end
 
-  # Translation-only stand-in: composing adds origins (SketchUp's transform! composes with the existing transformation).
+  # Affine stand-in (rotation by axes + translation, no scaling maths). Composition follows SketchUp:
+  # group.transform!(t) applies t AFTER the group's existing transformation.
   class Transformation
-    attr_reader :origin
+    attr_reader :origin, :cols
     attr_accessor :xscale, :yscale, :zscale
 
     def self.translation(vector)
       new(Point3d.new(vector.x, vector.y, vector.z))
     end
 
-    def initialize(origin = Point3d.new)
+    # Transformation.new(origin) is a pure translation; Transformation.new(origin, xaxis, yaxis) also rotates (z = x cross y).
+    def initialize(origin = Point3d.new, xaxis = nil, yaxis = nil)
       @origin = origin
+      ex = xaxis ? xaxis.to_a : [1.0, 0.0, 0.0]
+      ey = yaxis ? yaxis.to_a : [0.0, 1.0, 0.0]
+      ez = [ex[1] * ey[2] - ex[2] * ey[1], ex[2] * ey[0] - ex[0] * ey[2], ex[0] * ey[1] - ex[1] * ey[0]]
+      @cols = [ex, ey, ez]
       @xscale = @yscale = @zscale = 1.0
+    end
+
+    def linear(v)
+      3.times.map { |r| @cols[0][r] * v[0] + @cols[1][r] * v[1] + @cols[2][r] * v[2] }
+    end
+
+    def apply(point)
+      l = linear(point.to_a)
+      Point3d.new(l[0] + origin.x, l[1] + origin.y, l[2] + origin.z)
+    end
+
+    # self applied after other
+    def *(other)
+      o = apply(other.origin)
+      self.class.new(o, Vector3d.new(*linear(other.cols[0])), Vector3d.new(*linear(other.cols[1])))
     end
   end
 end
@@ -180,8 +205,7 @@ module Sketchup
     end
 
     def transform!(t)
-      o = @transformation.origin
-      @transformation = Geom::Transformation.new(Geom::Point3d.new(o.x + t.origin.x, o.y + t.origin.y, o.z + t.origin.z))
+      @transformation = t * @transformation
     end
 
     def set_attribute(dict, key, value)
@@ -205,8 +229,7 @@ module Sketchup
     end
 
     def world_points
-      o = transformation.origin
-      local_points.map { |p| Geom::Point3d.new(p.x + o.x, p.y + o.y, p.z + o.z) }
+      local_points.map { |p| transformation.apply(p) }
     end
 
     def bounds

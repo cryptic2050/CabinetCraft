@@ -9,25 +9,29 @@ module CabinetCraft
   # the per-cabinet rules (fixed width, or min / max). The cabinet data in the model remains the source of truth for sizes.
   class Run
     ITEM_KEYS = %w[cabinet_id fixed width min max].freeze
+    AXES = %w[x y].freeze # the model axis the cabinets advance along (a run along the second wall of a corner uses y)
 
-    attr_reader :id, :name, :length, :items
+    attr_reader :id, :name, :length, :items, :axis
 
-    def initialize(id:, name:, length:, items:)
+    def initialize(id:, name:, length:, items:, axis: 'x')
+      raise ArgumentError, "Run axis must be one of #{AXES.join(', ')}" unless AXES.include?(axis)
+
       @id = id
       @name = name
       @length = length
       @items = items.freeze
+      @axis = axis
     end
 
-    def self.build(name:, length:, items:)
-      new(id: SecureRandom.uuid, name: name, length: Float(length), items: items.map { |i| clean_item(i) })
+    def self.build(name:, length:, items:, axis: 'x')
+      new(id: SecureRandom.uuid, name: name, length: Float(length), items: items.map { |i| clean_item(i) }, axis: axis)
     end
 
     # Untrusted data (it comes from the model file): returns nil unless it is usable.
     def self.from_h(raw)
       return nil unless raw.is_a?(Hash) && raw['id'].is_a?(String) && raw['items'].is_a?(Array) && !raw['items'].empty?
 
-      new(id: raw['id'], name: raw['name'].to_s[0, 40], length: Float(raw['length']), items: raw['items'].map { |i| clean_item(i) })
+      new(id: raw['id'], name: raw['name'].to_s[0, 40], length: Float(raw['length']), items: raw['items'].map { |i| clean_item(i) }, axis: raw['axis'] || 'x')
     rescue ArgumentError, TypeError
       nil
     end
@@ -46,7 +50,7 @@ module CabinetCraft
     end
 
     def to_h
-      { 'id' => id, 'name' => name, 'length' => length, 'items' => items }
+      { 'id' => id, 'name' => name, 'length' => length, 'axis' => axis, 'items' => items }
     end
 
     def member_ids
@@ -68,7 +72,7 @@ module CabinetCraft
         rule = rules && rules[n]
         rule ? self.class.clean_item(item.merge(rule.transform_keys(&:to_s).slice('fixed', 'width', 'min', 'max').compact)) : item
       end
-      self.class.new(id: id, name: name, length: length ? Float(length) : self.length, items: new_items)
+      self.class.new(id: id, name: name, length: length ? Float(length) : self.length, items: new_items, axis: axis)
     end
   end
 end

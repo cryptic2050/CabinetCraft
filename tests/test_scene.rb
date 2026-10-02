@@ -1446,14 +1446,21 @@ class TestLinkedRuns < Minitest::Test
 
   def test_manual_overrides_ask_before_a_stretch_changes_them
     id = @run['members'][0]['cabinet_id']
-    @c.set_override(id, 'side_left', 'length' => 650)
+    @c.set_override(id, 'bottom', 'length' => 790) # the bottom's length follows the cabinet width (800 -> 900)
     r = @c.restretch_run(@run['id'], 2700)
-    refute r['ok'] if r.key?('needs_confirmation')
-    if r['needs_confirmation']
-      assert_equal [800, 800, 800], @c.runs_state['runs'].first['members'].map { |m| m['width'] }
-      assert @c.restretch_run(@run['id'], 3000, nil, 'keep')['updated']
-    end
+    assert_equal [false, true], [r['updated'], r['needs_confirmation']]
+    assert_equal ['B01-BOTTOM'], r['affected'].map { |a| a['part_id'] }
+    assert_equal [800, 800, 800], @c.runs_state['runs'].first['members'].map { |m| m['width'] } # nothing changed yet
+    assert @c.restretch_run(@run['id'], 2700, nil, 'keep')['updated']
     assert_equal [900, 900, 900], @c.runs_state['runs'].first['members'].map { |m| m['width'] }
+    assert_equal({ 'length' => 790.0 }, @c.list['cabinets'].find { |c| c['id'] == id }['overrides']['bottom']) # the override was kept
+  end
+
+  def test_resetting_overrides_when_a_stretch_changes_them
+    id = @run['members'][0]['cabinet_id']
+    @c.set_override(id, 'bottom', 'length' => 790)
+    assert @c.restretch_run(@run['id'], 2700, nil, 'reset')['updated']
+    refute @c.list['cabinets'].find { |c| c['id'] == id }['overrides'].key?('bottom')
   end
 
   def test_one_undo_step_and_unlink_keeps_the_cabinets
@@ -1471,5 +1478,239 @@ class TestLinkedRuns < Minitest::Test
     assert_equal [], @c.runs_state['runs']
     @model.set_attribute('CabinetCraft_Project', 'runs', 'not json')
     assert_equal [], @c.runs_state['runs']
+  end
+end
+
+class TestCornerLayoutScene < Minitest::Test
+  D = 560.0
+
+  def setup
+    Sketchup.reset_model!
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    CabinetCraft::Material.config = CabinetCraft::MaterialConfig.new
+    CabinetCraft::Templates.config = CabinetCraft::Templates::Config.new
+    @c = CabinetCraft::Interface::Controller.new
+    @model = Sketchup.active_model
+    @c.install_example('l_shaped_corner_base')
+    @c.install_example('blind_corner_base')
+    @l_type = type_named('L-shaped corner base')
+    @blind_type = type_named('Blind corner base')
+  end
+
+  def type_named(name)
+    @c.bootstrap['library'].find { |e| e['name'] == name }['type']
+  end
+
+  def groups
+    @model.entities.grep(Sketchup::Group)
+  end
+
+  def rect(g)
+    b = g.bounds
+    %i[x y].flat_map { |a| [b.min.send(a) * 25.4, b.max.send(a) * 25.4] }.then { |x0, x1, y0, y1| [x0.round(4), y0.round(4), x1.round(4), y1.round(4)] }
+  end
+
+  def group_for(label)
+    groups.find { |g| g.name.start_with?(label + ' ') }
+  end
+
+  # World-space box [x0, y0, x1, y1] (mm) of a part: the cabinet group's transformation applied to the part's own bounds.
+  def part(label, key)
+    g = group_for(label)
+    b = g.entities.grep(Sketchup::Group).find { |p| p.name == "#{label}-#{key}" }.bounds
+    pts = [b.min.x, b.max.x].product([b.min.y, b.max.y], [b.min.z, b.max.z]).map { |x, y, z| g.transformation.apply(Geom::Point3d.new(x, y, z)) }
+    [pts.map(&:x).min, pts.map(&:y).min, pts.map(&:x).max, pts.map(&:y).max].map { |v| (v * 25.4).round(4) }
+  end
+
+  def spec(kind, over = {})
+    base = { 'wall_a' => 3000, 'wall_b' => 2400, 'kind' => kind, 'depth' => 560, 'clearance' => 20, 'origin' => [0, 0],
+             'run_a' => [{ 'type' => 'base_single_door' }, { 'type' => 'base_drawer_3' }, { 'type' => 'base_double_door' }],
+             'run_b' => [{ 'type' => 'base_single_door' }, { 'type' => 'base_double_door' }] }
+    corner = case kind
+             when 'blind' then { 'type' => @blind_type, 'width' => 900 }
+             when 'l_shaped' then { 'type' => @l_type, 'width_a' => 900, 'width_b' => 1000 }
+             else {}
+             end
+    base.merge('corner' => corner).merge(over)
+  end
+
+  def no_overlaps
+    rects = groups.map { |g| [g.name, *rect(g)] }
+    assert_empty CabinetCraft::CornerLayout.overlapping(rects), rects.inspect
+  end
+
+  def test_plan_is_pure_and_reports_each_run
+    r = @c.plan_corner(spec('l_shaped'))
+    assert r['ok'], r['issues'].inspect
+    assert_equal [900.0, 2100.0], [r['layout']['a']['start'], r['layout']['a']['length']]
+    assert_equal 3, r['run_a']['widths'].size
+    assert_equal 2100.0, r['run_a']['widths'].sum
+    assert_equal 1400.0, r['run_b']['widths'].sum
+    assert_empty r['overlaps']
+    assert_empty groups
+  end
+
+  def test_none_corner_run_a_faces_the_room_and_run_b_clears_it
+    res = @c.create_corner_layout(spec('none'))
+    assert res['ok']
+    a = res['created']['a'].map { |c| rect(group_for(c['label'])) }
+    b = res['created']['b'].map { |c| rect(group_for(c['label'])) }
+    a.each { |r| assert_equal [0.0, D + 18], [r[1], r[3]] } # run A stands in front of wall A (y = 0); the 18 mm door adds to the depth
+    assert_equal 0.0, a.map(&:first).min
+    a.sort.each_cons(2) { |p, q| assert_in_delta p[2], q[0], 1e-3 }
+    b.each { |r| assert_equal [0.0, D + 18], [r[0], r[2]] } # run B stands in front of wall B (x = 0)
+    assert_equal 580.0, b.map { |r| r[1] }.min               # depth + clearance
+    b.sort_by { |r| r[1] }.each_cons(2) { |p, q| assert_in_delta p[3], q[1], 1e-3 }
+    no_overlaps
+    assert_empty(@c.validate['issues'].select { |i| i['code'] == 'cabinets_overlap' })
+  end
+
+  def test_fronts_face_into_the_room
+    res = @c.create_corner_layout(spec('none'))
+    la = res['created']['a'].first['label']
+    lb = res['created']['b'].first['label']
+    door_a = part(la, 'DOOR_1')
+    door_b = part(lb, 'DOOR_1')
+    assert_in_delta D, door_a[1], 1e-3 # door in front of run A: it starts at y = depth
+    assert_in_delta D, door_b[0], 1e-3 # door in front of run B: it starts at x = depth
+    assert_operator part(la, 'BACK')[3], :<=, 20 # back panel against the wall (y near 0, set back a little)
+    assert_operator part(lb, 'BACK')[2], :<=, 20 # back panel against the wall (x near 0)
+  end
+
+  def test_l_shaped_corner_fills_the_corner_and_runs_start_after_its_arms
+    res = @c.create_corner_layout(spec('l_shaped'))
+    corner = rect(group_for(res['created']['corner']['label']))
+    assert_equal [0.0, 0.0, 900.0, 1000.0], corner
+    a = res['created']['a'].map { |c| rect(group_for(c['label'])) }
+    b = res['created']['b'].map { |c| rect(group_for(c['label'])) }
+    assert_equal 900.0, a.map(&:first).min
+    assert_equal 1000.0, b.map { |r| r[1] }.min
+    assert_in_delta 3000, a.map { |r| r[2] }.max, 1e-3
+    assert_in_delta 2400, b.map { |r| r[3] }.max, 1e-3
+    no_overlaps
+  end
+
+  def test_blind_corner_turns_its_blind_panel_towards_the_corner
+    res = @c.create_corner_layout(spec('blind'))
+    label = res['created']['corner']['label']
+    assert_equal [0.0, 0.0, 900.0, D + 18], rect(group_for(label))
+    blind = part(label, 'BLIND_PANEL')
+    door = part(label, 'DOOR')
+    assert_in_delta 350, blind[2], 1e-3 # the blind panel is at the wall-B end (x from 0 to 350)
+    assert_in_delta 0, blind[0], 1e-3
+    assert_operator door[0], :>=, 350 - 1e-3
+    assert_equal 900.0, rect(group_for(res['created']['a'].first['label']))[0]
+    assert_equal 580.0, res['created']['b'].map { |c| rect(group_for(c['label']))[1] }.min # clear of the blind cabinet's 578 mm front
+    no_overlaps
+  end
+
+  def test_layout_is_one_undo_step_and_remembered
+    n = @model.instance_variable_get(:@ops).count { |o| o.first == :start }
+    res = @c.create_corner_layout(spec('l_shaped'))
+    assert_equal n + 1, @model.instance_variable_get(:@ops).count { |o| o.first == :start }
+    lay = @c.layouts_state['layouts'].first
+    assert_equal ['L01', 'l_shaped', 3000.0, 2400.0, true], [lay['name'], lay['kind'], lay['wall_a'], lay['wall_b'], lay['in_sync']]
+    assert_equal %w[R01 R02], @c.runs_state['runs'].map { |r| r['name'] }
+    assert_equal %w[x y], @c.runs_state['runs'].map { |r| r['axis'] }
+    assert_equal 6, groups.size
+    assert_equal res['layout']['id'], lay['id']
+    assert_equal lay['id'], CabinetCraft::Interface::Controller.new.layouts_state['layouts'].first['id']
+  end
+
+  def test_restretch_layout_resizes_both_runs_and_keeps_everything_edge_to_edge
+    res = @c.create_corner_layout(spec('l_shaped'))
+    id = res['layout']['id']
+    r = @c.restretch_layout(id, 3600, 2700)
+    assert r['updated']
+    assert_equal [3600.0, 2700.0], [r['layout']['wall_a'], r['layout']['wall_b']]
+    a = res['created']['a'].map { |c| rect(group_for(c['label'])) }.sort
+    b = res['created']['b'].map { |c| rect(group_for(c['label'])) }.sort_by { |q| q[1] }
+    assert_equal 900.0, a.first[0]
+    a.each_cons(2) { |p, q| assert_in_delta p[2], q[0], 1e-3 }
+    assert_in_delta 3600, a.last[2], 1e-3
+    assert_equal 1000.0, b.first[1]
+    b.each_cons(2) { |p, q| assert_in_delta p[3], q[1], 1e-3 }
+    assert_in_delta 2700, b.last[3], 1e-3
+    assert_equal [0.0, 0.0, 900.0, 1000.0], rect(group_for(res['created']['corner']['label'])) # the corner cabinet did not move
+    no_overlaps
+    assert @c.layouts_state['layouts'].first['in_sync']
+  end
+
+  def test_restretch_is_one_undo_step_and_a_blank_wall_keeps_the_current_length
+    id = @c.create_corner_layout(spec('none'))['layout']['id']
+    n = @model.instance_variable_get(:@ops).count { |o| o.first == :start }
+    r = @c.restretch_layout(id, 2700, '')
+    assert_equal n + 1, @model.instance_variable_get(:@ops).count { |o| o.first == :start }
+    assert_equal [2700.0, 2400.0], [r['layout']['wall_a'], r['layout']['wall_b']]
+  end
+
+  def test_blind_corner_stays_against_the_wall_after_resizing_it
+    res = @c.create_corner_layout(spec('blind'))
+    id = res['layout']['id']
+    cab = @c.list['cabinets'].find { |c| c['id'] == res['created']['corner']['id'] }
+    @c.update(cab['id'], cab['params'].merge('width' => 1000))
+    r = @c.restretch_layout(id)
+    assert r['updated'], r.inspect
+    assert_equal [0.0, 0.0, 1000.0, D + 18], rect(group_for(res['created']['corner']['label']))
+    assert_equal 1000.0, res['created']['a'].map { |c| rect(group_for(c['label']))[0] }.min
+    no_overlaps
+  end
+
+  def test_nothing_is_created_when_the_layout_is_invalid
+    assert_raises(ArgumentError) { @c.create_corner_layout(spec('l_shaped', 'wall_a' => 800)) }             # wall shorter than the arm
+    assert_raises(ArgumentError) { @c.create_corner_layout(spec('l_shaped', 'corner' => { 'type' => 'base_cabinet', 'width_a' => 900, 'width_b' => 900 })) } # no arm parameters
+    assert_raises(ArgumentError) { @c.create_corner_layout(spec('blind', 'corner' => { 'width' => 900 })) }  # no corner type
+    assert_raises(ArgumentError) { @c.create_corner_layout(spec('none', 'run_a' => [{ 'type' => 'nope' }])) }
+    assert_raises(ArgumentError) { @c.create_corner_layout(spec('none', 'wall_b' => 500)) }                  # run B has no room
+    assert_raises(ArgumentError) { @c.create_corner_layout(spec('none', 'run_a' => [{ 'type' => 'base_cabinet', 'params' => { 'material' => 'missing' } }])) }
+    assert_empty groups
+    assert_empty @c.layouts_state['layouts']
+    assert_empty @c.runs_state['runs']
+  end
+
+  def test_a_row_that_cannot_fit_is_refused
+    err = assert_raises(ArgumentError) { @c.create_corner_layout(spec('none', 'wall_a' => 800)) }
+    assert_match(/too long/, err.message)
+    assert_empty groups
+  end
+
+  def test_missing_corner_cabinet_blocks_the_restretch_and_unlink_keeps_the_cabinets
+    res = @c.create_corner_layout(spec('l_shaped'))
+    id = res['layout']['id']
+    group_for(res['created']['corner']['label']).erase!
+    assert_equal false, @c.layouts_state['layouts'].first['in_sync']
+    assert_match(/no longer in the model/, assert_raises(ArgumentError) { @c.restretch_layout(id, 3200) }.message)
+    count = groups.size
+    assert_empty @c.unlink_layout(id)['layouts']
+    assert_equal count, groups.size
+    assert_equal 2, @c.runs_state['runs'].size
+    assert_raises(ArgumentError) { @c.unlink_layout(id) }
+  end
+
+  def test_layouts_one_side_only_and_origin_default_after_existing_cabinets
+    @c.create('base_cabinet', 'width' => 500)
+    res = @c.create_corner_layout(spec('none', 'origin' => nil, 'run_b' => []))
+    assert res['ok']
+    assert_nil @c.layouts_state['layouts'].first['run_b']
+    first = res['created']['a'].map { |c| rect(group_for(c['label']))[0] }.min
+    assert_in_delta 500, first, 1e-3
+  end
+
+  def test_corrupt_stored_layouts_are_ignored
+    @model.set_attribute('CabinetCraft_Project', 'layouts', '{"a":{"id":"x","kind":"zig"},"b":5,"c":{"id":"y","kind":"none","wall_a":"abc"}}')
+    assert_equal [], @c.layouts_state['layouts']
+    @model.set_attribute('CabinetCraft_Project', 'layouts', 'garbage')
+    assert_equal [], @c.layouts_state['layouts']
+  end
+
+  def test_manual_overrides_ask_before_a_layout_resize_changes_them
+    res = @c.create_corner_layout(spec('none', 'wall_a' => 2400)) # three cabinets of 800
+    first = res['created']['a'].first['id']
+    @c.set_override(first, 'bottom', 'length' => 790)
+    r = @c.restretch_layout(res['layout']['id'], 2700) # 900 each: the override would change
+    assert_equal [false, true], [r['updated'], r['needs_confirmation']]
+    assert_operator r['affected'].size, :>=, 1
+    assert_equal 2400.0, @c.layouts_state['layouts'].first['wall_a'] # nothing was changed
+    assert @c.restretch_layout(res['layout']['id'], 2700, nil, 'keep')['updated']
   end
 end
