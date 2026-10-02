@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative 'attributes'
+require_relative 'containers'
 require_relative '../core/units'
 require_relative '../manufacturing/assembly'
 
@@ -19,7 +20,7 @@ module CabinetCraft
       end
 
       def parts(group)
-        group.entities.grep(::Sketchup::Group)
+        Containers.child_groups(group)
       end
 
       # "dx,dy,dz" in mm, or nil when the part is in its assembled position.

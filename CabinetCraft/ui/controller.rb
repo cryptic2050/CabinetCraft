@@ -257,7 +257,7 @@ module CabinetCraft
 
       # Library entries with the starting values a NEW cabinet of each type gets (standards applied server-side).
       def library_entries
-        Library.entries.map { |e| e.merge('resolved' => Library.defaults_for(e['type'])) }
+        Library.entries.map { |e| e.merge('resolved' => e['user'] == 'example' ? {} : Library.defaults_for(e['type'])) }
       end
 
       def standards_summary
@@ -490,9 +490,14 @@ module CabinetCraft
         plan = updated.plan
         raise ArgumentError, plan['issues'].first.to_s unless plan['ok']
 
-        members = updated.items.map { |i| Scene::Registry.find(model, i['cabinet_id']) }
-        missing = members.each_index.select { |n| members[n].nil? }
+        entries = updated.items.map { |i| Scene::Registry.find_entry(model, i['cabinet_id']) }
+        missing = entries.each_index.select { |n| entries[n].nil? }
         raise ArgumentError, "Cabinet #{missing.first + 1} of #{run.name} is no longer in the model: unlink the run and create it again" if missing.any?
+
+        nested = entries.find(&:nested?)
+        raise ArgumentError, "#{nested.cabinet.label} is inside another group or component: runs and corner layouts can only move cabinets that are at the top level of the model" if nested
+
+        members = entries.map { |e| [e.entity, e.cabinet] }
 
         prepared = stretch_prepare(members, plan['widths'], mode)
         return prepared if prepared.is_a?(Hash)
@@ -980,20 +985,22 @@ module CabinetCraft
       # Selects a cabinet, or one of its parts (which opens the cabinet group for editing).
       def select_target(cabinet_id, part_key = nil, entity_id = nil)
         if cabinet_id
-          group, cab = Scene::Registry.find(model, cabinet_id)
-          return failure('That cabinet no longer exists in the model') unless group
+          entry = Scene::Registry.find_entry(model, cabinet_id)
+          return failure('That cabinet no longer exists in the model') unless entry
 
+          group = entry.entity
+          cab = entry.cabinet
           if part_key
-            part = group.entities.grep(::Sketchup::Group).find { |g| g.name == "#{cab.label}-#{part_key.upcase}" }
+            part = Scene::Containers.child_groups(group).find { |g| g.name == "#{cab.label}-#{part_key.upcase}" }
             if part
-              model.active_path = [group]
+              model.active_path = entry.path + [group] # open every container on the way down so the part can be selected
               model.selection.clear
               model.selection.add(part)
               model.active_view.zoom(part)
               return { 'ok' => true, 'selected' => 'part' }
             end
           end
-          model.active_path = nil
+          model.active_path = entry.path.empty? ? nil : entry.path
           return select(cabinet_id)
         end
         ent = entity_id && model.find_entity_by_id(entity_id)

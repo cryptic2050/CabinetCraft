@@ -210,10 +210,11 @@ module CabinetCraft
       def layout_corner(rec)
         return [nil, nil] if rec.kind == 'none'
 
-        found = Scene::Registry.find(model, rec.corner_cabinet_id.to_s)
-        raise ArgumentError, 'The corner cabinet of this layout is no longer in the model: unlink the layout and create it again' unless found
+        entry = Scene::Registry.find_entry(model, rec.corner_cabinet_id.to_s)
+        raise ArgumentError, 'The corner cabinet of this layout is no longer in the model: unlink the layout and create it again' unless entry
+        raise ArgumentError, "#{entry.cabinet.label} is inside another group or component: corner layouts can only move cabinets at the top level of the model" if entry.nested?
 
-        found
+        [entry.entity, entry.cabinet]
       end
 
       def corner_dims(rec, cab)

@@ -3,6 +3,7 @@
 require_relative '../core/units'
 require_relative '../core/material'
 require_relative '../scene/attributes'
+require_relative '../scene/containers'
 
 module CabinetCraft
   module Generators
@@ -23,7 +24,7 @@ module CabinetCraft
       # own transformation (position/rotation in the model) is preserved.
       def rebuild(group, cabinet)
         group.make_unique if group.respond_to?(:make_unique)
-        group.entities.clear!
+        Scene::Containers.entities(group).clear!
         populate(group, cabinet)
         group
       end
@@ -31,7 +32,7 @@ module CabinetCraft
       def populate(group, cabinet)
         rows = cabinet.part_rows.to_h { |r| [r['key'], r] } # computed once, not per panel
         cabinet.panels.each do |panel|
-          part = group.entities.add_group
+          part = Scene::Containers.entities(group).add_group
           build_box(part.entities, panel)
           part.name = cabinet.part_id(panel)
           part.material = sketchup_material(group, panel)

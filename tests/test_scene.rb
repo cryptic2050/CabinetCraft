@@ -2103,3 +2103,228 @@ class TestProductionScene < Minitest::Test
     assert_equal s['parts'], @c.parts_list['rows'].size
   end
 end
+
+class TestNestedCabinets < Minitest::Test
+  def setup
+    Sketchup.reset_model!
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    CabinetCraft::Material.config = CabinetCraft::MaterialConfig.new
+    @c = CabinetCraft::Interface::Controller.new
+    @model = Sketchup.active_model
+  end
+
+  def mm(v)
+    v / 25.4
+  end
+
+  def move(entity, x: 0, y: 0)
+    entity.transform!(Geom::Transformation.new(Geom::Point3d.new(mm(x), mm(y), 0)))
+  end
+
+  # Creates a cabinet, then puts its group inside a new parent group (at the top level) and returns [parent, cabinet group, cabinet].
+  def nest_in_group(type = 'base_cabinet', params = {})
+    before = @model.entities.grep(Sketchup::Group)
+    @c.create(type, params)
+    g = (@model.entities.grep(Sketchup::Group) - before).first
+    parent = @model.entities.add_group
+    @model.entities.instance_variable_get(:@items).delete_if { |e| e.equal?(g) }
+    parent.entities.instance_variable_get(:@items) << g
+    [parent, g, @c.list['cabinets'].last]
+  end
+
+  def test_a_cabinet_inside_a_group_is_found_by_every_report
+    nest_in_group
+    @c.create('base_single_door', {})
+    assert_equal 2, @c.list['cabinets'].size
+    assert_equal 2, @c.dashboard_state['project']['cabinets']
+    assert_equal %w[B01 B02], @c.list['cabinets'].map { |c| c['label'] }
+    assert_operator @c.parts_list['rows'].size, :>, 10
+    assert_equal 2, @c.cutting_list['cabinet_count']
+    assert_equal 'B03', CabinetCraft::Scene::Registry.next_label(@model) # labels continue after nested cabinets too
+  end
+
+  def test_new_cabinets_are_placed_after_the_world_position_of_nested_ones
+    parent, = nest_in_group('base_cabinet', 'width' => 600)
+    move(parent, x: 5000) # the container moves the cabinet to x 5000..5600 in the world
+    assert_in_delta 5600, CabinetCraft::Scene::Registry.next_x_mm(@model), 1e-3
+    @c.create('base_cabinet', 'width' => 400)
+    last = @model.entities.grep(Sketchup::Group).last
+    assert_in_delta 5600, last.bounds.min.x * 25.4, 1e-3
+  end
+
+  def test_overlap_is_judged_in_world_space_not_in_local_coordinates
+    pa, = nest_in_group('base_cabinet', 'width' => 600)
+    pb, = nest_in_group('base_cabinet', 'width' => 600)
+    # B02 was created at local x 600 (right of B01, touching); its parent places it 3 m further away: no overlap
+    move(pb, x: 3000)
+    assert_empty(@c.validate['issues'].select { |i| i['code'] == 'cabinets_overlap' })
+    # the parent brings it back 100 mm into B01 (600 + 3000 - 3100 = 500 < 600): they overlap in the world
+    move(pb, x: -3100)
+    assert_equal 1, @c.validate['issues'].count { |i| i['code'] == 'cabinets_overlap' }
+    refute_nil pa
+  end
+
+  def test_two_levels_of_nesting_are_searched_and_a_rotated_parent_is_respected
+    @c.create('base_cabinet', 'width' => 600)
+    g = @model.entities.grep(Sketchup::Group).first
+    @model.entities.instance_variable_get(:@items).delete_if { |e| e.equal?(g) }
+    outer = @model.entities.add_group
+    inner = outer.entities.add_group
+    inner.entities.instance_variable_get(:@items) << g
+    entry = CabinetCraft::Scene::Registry.entries(@model).first
+    assert_equal [outer, inner], entry.path
+    turned = Geom::Transformation.new(Geom::Point3d.new(0, 0, 0), Geom::Vector3d.new(0, 1, 0), Geom::Vector3d.new(-1, 0, 0)) # 90 degrees about z
+    outer.transform!(turned)
+    box = CabinetCraft::Scene::Containers.world_box(entry.entity, entry.path)
+    assert_in_delta 562 + 18, box[:max][0] - box[:min][0], 1.0 # after the turn the depth (562 + the 18 mm door) runs along world x
+    assert_in_delta 600, box[:max][1] - box[:min][1], 1e-3
+  end
+
+  def test_a_cabinet_inside_a_component_instance_is_found
+    @c.create('base_cabinet', {})
+    g = @model.entities.grep(Sketchup::Group).first
+    defn = @model.definitions.add('Kitchen')
+    defn.entities.instance_variable_get(:@items) << g
+    @model.entities.instance_variable_get(:@items).delete_if { |e| e.equal?(g) }
+    inst = @model.entities.add_instance(defn)
+    move(inst, x: 2000)
+    assert_equal ['B01'], @c.list['cabinets'].map { |c| c['label'] }
+    assert_in_delta 2000 + 600, CabinetCraft::Scene::Registry.next_x_mm(@model), 1e-3
+  end
+
+  def test_a_cabinet_that_is_itself_a_component_instance_can_be_edited_and_exploded
+    @c.create('base_double_door', {})
+    g = @model.entities.grep(Sketchup::Group).first
+    defn = @model.definitions.add('Cab')
+    g.entities.each { |e| defn.entities.instance_variable_get(:@items) << e }
+    inst = @model.entities.add_instance(defn)
+    attrs = g.attribute_dictionary('CabinetCraft').to_h
+    attrs.each { |k, v| inst.set_attribute('CabinetCraft', k, v) }
+    g.erase!
+    cab = @c.list['cabinets'].first
+    assert_equal 'B01', cab['label']
+    res = @c.update(cab['id'], cab['params'].merge('width' => 700)) # rebuild goes through definition.entities
+    assert res['updated'], res.inspect
+    assert_equal 700, @c.list['cabinets'].first['params']['width']
+    assert_operator CabinetCraft::Scene::Containers.child_groups(inst).size, :>, 5
+    assert_equal 0, @c.validate['issues'].count { |i| i['severity'] == 'error' }
+    @c.explode_cabinet(cab['id'], 100)
+    assert @c.assembly_state(cab['id'])['exploded_in_model']
+    @c.assemble_cabinet(cab['id'])
+    refute @c.assembly_state(cab['id'])['exploded_in_model']
+  end
+
+  def test_explode_works_on_a_nested_cabinet
+    _, g, cab = nest_in_group
+    before = g.entities.grep(Sketchup::Group).first.bounds.min.x
+    @c.explode_cabinet(cab['id'], 120)
+    assert @c.assembly_state(cab['id'])['exploded_in_model']
+    @c.assemble_cabinet(cab['id'])
+    assert_in_delta before, g.entities.grep(Sketchup::Group).first.bounds.min.x, 1e-9
+  end
+
+  def test_runs_and_layouts_refuse_to_move_a_nested_member
+    res = @c.create_run(2400, [{ 'type' => 'base_cabinet' }, { 'type' => 'base_cabinet' }, { 'type' => 'base_cabinet' }])
+    member = @model.entities.grep(Sketchup::Group).last
+    parent = @model.entities.add_group
+    @model.entities.instance_variable_get(:@items).delete_if { |e| e.equal?(member) }
+    parent.entities.instance_variable_get(:@items) << member
+    err = assert_raises(ArgumentError) { @c.restretch_run(res['runs'].first['id'], 2700) }
+    assert_match(/inside another group or component/, err.message)
+  end
+
+  def test_selecting_a_nested_cabinet_or_part_opens_its_containers
+    parent, g, cab = nest_in_group
+    @c.select_target(cab['id'], 'side_left')
+    assert_equal [parent, g], @model.active_path
+    @c.select_target(cab['id'])
+    assert_equal [parent], @model.active_path
+    assert_equal 1, @model.selection.length
+  end
+
+  def test_unreadable_nested_cabinet_data_is_reported
+    parent, g, = nest_in_group
+    g.set_attribute('CabinetCraft', 'params_json', '{ broken')
+    codes = @c.validate['issues'].map { |i| i['code'] }
+    assert_includes codes, 'unreadable_cabinet'
+    assert_empty @c.list['cabinets']
+    refute_nil parent
+  end
+
+  def test_the_search_depth_is_limited
+    @c.create('base_cabinet', {})
+    g = @model.entities.grep(Sketchup::Group).first
+    @model.entities.instance_variable_get(:@items).delete_if { |e| e.equal?(g) }
+    holder = @model.entities
+    10.times { holder = holder.add_group.entities }
+    holder.instance_variable_get(:@items) << g
+    assert_empty @c.list['cabinets'] # deeper than CabinetCraft::Scene::Registry::MAX_DEPTH containers
+  end
+end
+
+class TestBundledLibrary < Minitest::Test
+  def setup
+    Sketchup.reset_model!
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    CabinetCraft::Material.config = CabinetCraft::MaterialConfig.new
+    CabinetCraft::Templates.config = CabinetCraft::Templates::Config.new
+    @c = CabinetCraft::Interface::Controller.new
+  end
+
+  def entry(name)
+    @c.bootstrap['library'].find { |e| e['name'] == name }
+  end
+
+  def test_bundled_cabinets_are_listed_but_cannot_be_created_until_added
+    e = entry('Wall cabinet')
+    assert_equal ['example', 'example:wall_cabinet', 'WALL CABINETS'], [e['user'], e['type'], e['category']]
+    r = @c.preview('example:wall_cabinet', {})
+    assert_equal false, r['ok']
+    assert_match(/Unknown cabinet type/, r['issues'].first['message'])
+    assert_equal false, @c.create('example:wall_cabinet', {})['created']
+    assert_empty @c.list['cabinets']
+  end
+
+  def test_adding_a_bundled_cabinet_makes_it_a_normal_template_and_it_creates
+    res = @c.install_example('wall_cabinet')
+    id = res['saved_id']
+    assert_nil res['library'].find { |e| e['type'] == 'example:wall_cabinet' } # no longer offered as bundled
+    t = res['library'].find { |e| e['type'] == id }
+    assert_equal ['template', 'Wall cabinet'], [t['user'], t['name']]
+    assert @c.create(id, { 'width' => 800, 'doors' => 2 })['created']
+    assert_equal 800, @c.list['cabinets'].first['params']['width']
+    assert_equal 'Wall cabinet', @c.dashboard_state['project']['types'].first['name']
+  end
+
+  def test_every_bundled_entry_has_a_working_install
+    @c.bootstrap['library'].select { |e| e['user'] == 'example' }.each do |e|
+      id = @c.install_example(e['example_key'])['saved_id']
+      r = @c.create(id, {})
+      assert r['created'], "#{e['name']}: #{r.inspect}"
+    end
+    assert_equal 0, @c.bootstrap['library'].count { |e| e['user'] == 'example' }
+    assert_operator @c.list['cabinets'].size, :>=, 9
+    assert_equal 0, @c.validate['issues'].count { |i| i['severity'] == 'error' }
+  end
+
+  def test_the_sink_cabinet_is_a_real_entry_with_clear_space_under_the_sink
+    assert @c.create('base_sink', {})['created']
+    rows = @c.parts_list['rows']
+    assert_equal 2, rows.count { |r| r['key'] =~ /\Adoor_/ }
+    assert_equal 0, rows.count { |r| r['key'] =~ /shelf/ }
+  end
+
+  def test_the_roadmap_only_lists_what_cannot_be_created
+    planned = @c.bootstrap['planned'].values.flatten
+    names = @c.bootstrap['library'].map { |e| e['name'] }
+    assert_empty(planned & names)
+    assert_empty(planned.select { |n| n =~ /\A(Sink|Pantry|Single-door wall|2-door wardrobe|Single vanity|Base TV)/ }) # these are covered now
+    assert_includes planned, 'Oven cabinet' # honestly still missing
+  end
+
+  def test_resolved_defaults_exist_for_installed_entries_and_are_empty_for_bundled
+    lib = @c.bootstrap['library']
+    assert(lib.select { |e| e['user'] == 'example' }.all? { |e| e['resolved'] == {} })
+    assert(lib.reject { |e| e['user'] == 'example' }.all? { |e| e['resolved'].is_a?(Hash) && !e['resolved'].empty? })
+  end
+end

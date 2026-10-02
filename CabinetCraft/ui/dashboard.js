@@ -195,8 +195,8 @@
   function cabinetsView() {
     const q = S.search.toLowerCase();
     const impl = S.boot.library.filter((e) => !q || (e.name + e.category).toLowerCase().includes(q)).map((e) =>
-      `<div class="card"><h3>${esc(e.name)}<span class="badge impl">${e.user === 'template' ? 'TEMPLATE' : e.user === 'preset' ? 'SAVED' : 'IMPLEMENTED'}</span></h3><p>${esc(e.description)}</p>
-       <button class="primary" data-new="${esc(e.type)}">Configure &amp; create</button></div>`).join('');
+      `<div class="card"><h3>${esc(e.name)}<span class="badge impl">${e.user === 'template' ? 'TEMPLATE' : e.user === 'preset' ? 'SAVED' : e.user === 'example' ? 'BUNDLED' : 'IMPLEMENTED'}</span></h3><p>${esc(e.description)}</p>
+       ${e.user === 'example' ? `<button class="primary" data-example="${esc(e.example_key)}">Add to my library &amp; configure</button><span class="mute"> Adds an editable copy to TEMPLATES.</span>` : `<button class="primary" data-new="${esc(e.type)}">Configure &amp; create</button>`}</div>`).join('');
     const planned = Object.entries(S.boot.planned).map(([cat, names]) => {
       const f = names.filter((n) => !q || (n + cat).toLowerCase().includes(q));
       return f.length ? `<details><summary>${esc(cat)} <span class="badge plan">PLANNED</span></summary>
@@ -212,6 +212,11 @@
       S.type = b.dataset.new; S.editing = null; S.preview = null;
       S.params = Object.assign({}, S.boot.defaults[S.type]); S.tab = 'parameters'; render(); runPreview();
     }));
+    document.querySelectorAll('[data-example]').forEach((b) => (b.onclick = () => rpc('install_example', [b.dataset.example]).then((res) => {
+      if (res.ok === false) { toast((res.errors || ['Could not add the template'])[0]); return; }
+      setLibrary(res.library, res.schemas); S.type = res.saved_id; S.editing = null; S.preview = null;
+      S.params = Object.assign({}, S.boot.defaults[S.type]); S.tab = 'parameters'; render(); runPreview(); toast('Added to your templates');
+    }).catch(showError)));
   }
 
   function parametersView() {

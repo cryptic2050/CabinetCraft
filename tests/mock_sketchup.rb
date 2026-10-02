@@ -17,6 +17,10 @@ module Geom
     def to_a
       [x, y, z]
     end
+
+    def transform(t)
+      t.apply(self)
+    end
   end
 
   class Vector3d
@@ -166,6 +170,13 @@ module Sketchup
       g
     end
 
+    def add_instance(definition, transformation = nil)
+      i = ComponentInstance.new(@owner.model, definition, self)
+      i.transform!(transformation) if transformation
+      @items << i
+      i
+    end
+
     def add_face(pts)
       f = Face.new(pts)
       @items << f
@@ -177,20 +188,14 @@ module Sketchup
     end
   end
 
-  class Group
-    attr_reader :entities, :model, :transformation
+  # Behaviour shared by groups and component instances (attributes, transformation, bounds).
+  module EntityCore
+    attr_reader :model, :transformation
     attr_accessor :name, :material
 
-    def initialize(model, parent = nil)
-      @model = model
-      @parent = parent
-      @entities = Entities.new(self)
-      @attrs = Hash.new { |h, k| h[k] = {} }
-      @transformation = Geom::Transformation.new
-      @made_unique = 0
+    def made_unique
+      @made_unique
     end
-
-    attr_reader :made_unique
 
     def make_unique
       @made_unique += 1
@@ -224,7 +229,7 @@ module Sketchup
       d
     end
 
-    def local_points
+    def points_of(entities)
       entities.flat_map { |e| e.is_a?(Face) ? e.all_points : e.world_points }
     end
 
@@ -234,6 +239,28 @@ module Sketchup
 
     def bounds
       BoundingBox.new(world_points)
+    end
+
+    def setup_entity(model, parent)
+      @model = model
+      @parent = parent
+      @attrs = Hash.new { |h, k| h[k] = {} }
+      @transformation = Geom::Transformation.new
+      @made_unique = 0
+    end
+  end
+
+  class Group
+    include EntityCore
+    attr_reader :entities
+
+    def initialize(model, parent = nil)
+      setup_entity(model, parent)
+      @entities = Entities.new(self)
+    end
+
+    def local_points
+      points_of(entities)
     end
 
     # Copy as "move + copy" would (identical attributes, separate entities).
@@ -246,6 +273,30 @@ module Sketchup
         e.entities.each { |f| c.entities.instance_variable_get(:@items) << f } if e.is_a?(Group)
       end
       g
+    end
+  end
+
+  class ComponentDefinition
+    attr_reader :entities, :name
+
+    def initialize(model, name)
+      @name = name
+      @entities = Entities.new(Struct.new(:model).new(model))
+    end
+  end
+
+  # Like the real API: an instance has NO `entities` method; its contents are in `definition.entities`.
+  class ComponentInstance
+    include EntityCore
+    attr_reader :definition
+
+    def initialize(model, definition, parent = nil)
+      setup_entity(model, parent)
+      @definition = definition
+    end
+
+    def local_points
+      points_of(definition.entities)
     end
   end
 
@@ -295,6 +346,14 @@ module Sketchup
 
     def get_attribute(dict, key, default = nil)
       (@attrs ||= {}).fetch([dict, key], default)
+    end
+
+    def definitions
+      @definitions ||= Struct.new(:model) do
+        def add(name)
+          ComponentDefinition.new(model, name)
+        end
+      end.new(self)
     end
 
     def find_entity_by_id(id)

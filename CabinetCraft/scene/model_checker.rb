@@ -2,6 +2,8 @@
 
 require_relative 'attributes'
 require_relative 'explode'
+require_relative 'containers'
+require_relative 'registry'
 require_relative '../validation/validator'
 require_relative '../validation/collision_checker'
 
@@ -17,13 +19,11 @@ module CabinetCraft
       def run(model)
         issues = []
         boxes = []
-        model.entities.grep(::Sketchup::Group).each do |group|
-          dict = group.attribute_dictionary(CABINET_DICT)
-          next unless dict
-
-          cab = Attributes.read_cabinet(group)
+        Registry.candidates(model).each do |entry|
+          group = entry.entity
+          cab = entry.cabinet
           if cab.nil?
-            code = dict['cabinet_id'].to_s.empty? ? 'missing_cabinet_id' : 'unreadable_cabinet'
+            code = group.get_attribute(CABINET_DICT, 'cabinet_id').to_s.empty? ? 'missing_cabinet_id' : 'unreadable_cabinet'
             msg = code == 'missing_cabinet_id' ? 'A CabinetCraft group has no cabinet ID' : 'Cabinet data could not be read (it may have been edited by hand)'
             issues << Validation::Validator.issue(:error, code, msg).merge('entity_id' => group.entityID)
             next
@@ -32,7 +32,7 @@ module CabinetCraft
           if Explode.exploded?(group)
             issues << Validation::Validator.issue(:warning, 'cabinet_exploded', "#{cab.label} is shown exploded in the model (ASSEMBLY tab: Assemble). Its position is not checked against other cabinets.", cabinet: cab)
           else
-            boxes << [cab, world_box(group)]
+            boxes << [cab, Containers.world_box(group, entry.path)]
           end
         end
         issues.concat(check_overlaps(boxes))
@@ -49,7 +49,7 @@ module CabinetCraft
 
         expected = cab.part_rows.to_h { |r| [r['part_id'], r] }
         panels = cab.panels.to_h { |p| [cab.part_id(p), p] }
-        children = group.entities.grep(::Sketchup::Group)
+        children = Containers.child_groups(group)
         names = children.map(&:name)
 
         (expected.keys - names).each do |pid|

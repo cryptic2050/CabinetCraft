@@ -12,7 +12,7 @@ require 'sketchup.rb'
   core/machining_config manufacturing/cnc_posts manufacturing/machining manufacturing/cnc manufacturing/costing manufacturing/dashboard manufacturing/production manufacturing/assembly exporters/assembly_svg
   exporters/dxf_exporter exporters/svg_exporter exporters/pdf_writer exporters/pdf_reports
   validation/collision_checker validation/machining_checker validation/validator
-  scene/attributes scene/registry scene/settings_store scene/project_store scene/explode scene/model_checker
+  scene/containers scene/attributes scene/registry scene/settings_store scene/project_store scene/explode scene/model_checker
   ui/layout_commands ui/overview_commands ui/production_commands ui/controller ui/dialog
 ].each { |f| require File.join(CabinetCraft::PLUGIN_ROOT, f) }
 

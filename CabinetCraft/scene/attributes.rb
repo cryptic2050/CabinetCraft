@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../core/cabinet'
+require_relative 'containers'
 
 module CabinetCraft
   # Everything that touches SketchUp attribute dictionaries lives in Scene.
@@ -13,7 +14,7 @@ module CabinetCraft
       module_function
 
       def cabinet?(entity)
-        entity.is_a?(::Sketchup::Group) && !entity.get_attribute(CABINET_DICT, 'cabinet_id').nil?
+        Containers.container?(entity) && !entity.get_attribute(CABINET_DICT, 'cabinet_id').nil?
       end
 
       def write_cabinet(entity, cabinet)

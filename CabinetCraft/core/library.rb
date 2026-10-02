@@ -50,27 +50,43 @@ module CabinetCraft
         'type' => 'base_open_shelf', 'category' => 'BASE CABINETS', 'name' => 'Open shelf base cabinet',
         'description' => 'No fronts, two shelves, optional dividers, toe kick (100 mm by default).',
         'defaults' => BASE_PRESET.merge('width' => 600.0, 'door_count' => 0, 'shelf_count' => 2)
+      },
+      {
+        'type' => 'base_sink', 'category' => 'BASE CABINETS', 'name' => 'Sink base cabinet',
+        'description' => 'Two doors and no shelf, so the space under the sink stays clear. The sink cut-out and plumbing holes are not modelled.',
+        'defaults' => BASE_PRESET.merge('width' => 800.0, 'door_count' => 2, 'shelf_count' => 0)
       }
     ].freeze
 
+    # Still not available (no generator, template or preset yet). Everything that can be created is in ENTRIES, a bundled template or a preset.
     PLANNED = {
-      'BASE CABINETS' => ['Sink cabinet', 'Oven cabinet', 'Hob cabinet', 'Dishwasher cabinet',
-                          'Corner base cabinet', 'Blind corner cabinet', 'Pull-out cabinet', 'Bottle cabinet',
-                          'Appliance cabinet'],
-      'WALL CABINETS' => ['Single-door wall', 'Double-door wall', 'Lift-up wall', 'Open wall', 'Corner wall'],
-      'TALL CABINETS' => ['Pantry', 'Oven tower', 'Microwave tower', 'Refrigerator housing', 'Utility cabinet',
-                          'Tall drawer cabinet'],
-      'WARDROBES' => ['2-door wardrobe', '3-door wardrobe', 'Sliding wardrobe', 'Hinged wardrobe', 'Open wardrobe',
-                      'Wardrobe with drawers', 'Hanging section', 'Shelf section', 'Walk-in modules'],
-      'VANITIES' => ['Single vanity', 'Double vanity', 'Drawer vanity', 'Open vanity'],
-      'TV UNITS' => ['Floating TV unit (installable example in TEMPLATES)', 'Full-height TV wall', 'Base TV cabinet', 'Open shelf TV unit']
+      'BASE CABINETS' => ['Oven cabinet', 'Hob cabinet', 'Dishwasher cabinet', 'Pull-out cabinet', 'Bottle cabinet', 'Appliance cabinet'],
+      'WALL CABINETS' => ['Lift-up wall cabinet', 'Corner wall cabinet'],
+      'TALL CABINETS' => ['Oven tower', 'Microwave tower', 'Refrigerator housing', 'Tall drawer cabinet'],
+      'WARDROBES' => ['Sliding wardrobe', 'Wardrobe with drawers', 'Walk-in modules'],
+      'VANITIES' => ['Drawer vanity'],
+      'TV UNITS' => ['Full-height TV wall']
     }.freeze
 
     module_function
 
     # Built-in cabinets, then the user's presets and templates (all dynamic).
     def entries
+      installed_entries + bundled_entries
+    end
+
+    # Cabinets that can be created right now.
+    def installed_entries
       ENTRIES + preset_entries + template_entries
+    end
+
+    # Bundled templates (Templates::Examples) that the user has not added yet. They are listed so they can be found and added with one
+    # click; they cannot be previewed or created until then (see `entry`).
+    def bundled_entries
+      have = Templates.config.templates.map(&:name)
+      Templates::Examples::ALL.reject { |_, ex| have.include?(ex['name']) }.map do |key, ex|
+        { 'type' => "example:#{key}", 'category' => ex['category'], 'name' => ex['name'], 'description' => ex['description'], 'defaults' => {}, 'user' => 'example', 'example_key' => key }
+      end
     end
 
     def preset_entries
@@ -86,8 +102,9 @@ module CabinetCraft
       end
     end
 
+    # Only cabinets that can be created: a bundled template that is not installed yet is not an entry.
     def entry(type)
-      entries.find { |e| e['type'] == type }
+      installed_entries.find { |e| e['type'] == type }
     end
 
     # Parameter schema for a cabinet type. nil for a template that is not available (e.g. missing on this machine).
