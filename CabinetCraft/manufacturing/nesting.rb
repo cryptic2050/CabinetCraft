@@ -16,8 +16,8 @@ module CabinetCraft
     # material may rotate freely), kerf, edge trim, extra minimum spacing, and
     # locked parts that must stay exactly where the user put them.
     module Nesting
-      DEFAULTS = { 'kerf' => 4.0, 'trim' => 10.0, 'spacing' => 0.0 }.freeze
-      LIMITS = { 'kerf' => [0.0, 10.0], 'trim' => [0.0, 50.0], 'spacing' => [0.0, 50.0] }.freeze
+      DEFAULTS = { 'kerf' => 4.0, 'trim' => 10.0, 'spacing' => 0.0, 'min_offcut' => 150.0 }.freeze
+      LIMITS = { 'kerf' => [0.0, 10.0], 'trim' => [0.0, 50.0], 'spacing' => [0.0, 50.0], 'min_offcut' => [20.0, 1000.0] }.freeze
       MAX_SHEETS = 200
       EPS = 1e-6
 
@@ -78,9 +78,57 @@ module CabinetCraft
 
         released = []
         fixed, auto = split_locked(parts, locked, ctx, released)
-        runs = sort_orders.map { |order| run(auto.sort_by(&order), fixed, ctx) }
-        best = runs.min_by { |r| [r[:unplaced].size, r[:sheets].size, -r[:offcut]] }
-        build_result(best, ctx, released)
+        build_result(search(auto, fixed, ctx), ctx, released)
+      end
+
+      FITS = %i[area short long].freeze     # how a free rectangle is scored for a part
+      SPLITS = %i[short long].freeze        # which leftover axis the guillotine cut follows
+
+      # Tries every sort order x fit rule x split rule, then seeded random perturbations of the three best orders, and keeps
+      # the best packing (fewest unplaced, then fewest sheets, then the largest free block on the last sheet). Deterministic:
+      # the same input always gives the same layout. Still a heuristic: nothing here proves a layout optimal.
+      def search(auto, fixed, ctx)
+        runs = []
+        sort_orders.each do |order|
+          sorted = auto.sort_by(&order)
+          FITS.each { |fit| SPLITS.each { |split| runs << run(sorted, fixed, ctx, fit: fit, split: split).merge(order: sorted, fit: fit, split: split) } }
+        end
+        rng = Random.new(auto.size * 7919 + auto.sum { |p| p['length'] * p['width'] }.to_i % 100_000)
+        per = auto.size < 2 ? 0 : (random_runs(auto.size) / 3.0).ceil # nothing to reorder with fewer than two parts
+        runs.sort_by { |r| quality(r) }.first(3).each do |base|
+          per.times do
+            order = perturb(base[:order], rng)
+            runs << run(order, fixed, ctx, fit: base[:fit], split: base[:split]).merge(order: order, fit: base[:fit], split: base[:split])
+          end
+        end
+        runs.min_by { |r| quality(r) }
+      end
+
+      def quality(run)
+        [run[:unplaced].size, run[:sheets].size, -run[:offcut]]
+      end
+
+      # How many extra random packings to try: fewer for big projects, so the time stays reasonable.
+      def random_runs(count)
+        if count <= 40 then 48
+        elsif count <= 100 then 24
+        elsif count <= 250 then 9
+        elsif count <= 500 then 3
+        else 0
+        end
+      end
+
+      # Moves a few parts one or two places in the order (the order stays mostly "big first").
+      def perturb(order, rng)
+        return order if order.size < 2
+
+        out = order.dup
+        [out.size / 4, 1].max.times do
+          i = rng.rand(out.size)
+          j = [[i + rng.rand(-3..3), 0].max, out.size - 1].min
+          out.insert(j, out.delete_at(i))
+        end
+        out
       end
 
       def sort_orders
@@ -139,7 +187,7 @@ module CabinetCraft
       end
 
       # One packing run for a given part order.
-      def run(order, fixed, ctx)
+      def run(order, fixed, ctx, fit: :area, split: :short)
         gap = ctx[:gap]
         sheets = []
         new_sheet = -> { sheets << { free: [Free.new(0.0, 0.0, ctx[:uw] + gap, ctx[:uh] + gap)], placed: [] } }
@@ -154,23 +202,23 @@ module CabinetCraft
         unplaced = []
         order.each do |part|
           opts = orientations(part, ctx[:sheet]['grain_free'], ctx[:sheet]['grain_axis'] || 'length')
-          pick = best_spot(sheets, opts, gap)
+          pick = best_spot(sheets, opts, gap, fit)
           if pick.nil? && sheets.size < MAX_SHEETS && opts.any? { |w, h, _| w <= ctx[:uw] + EPS && h <= ctx[:uh] + EPS }
             new_sheet.call
-            pick = best_spot(sheets, opts, gap)
+            pick = best_spot(sheets, opts, gap, fit)
           end
           if pick
-            place(sheets[pick[:sheet]], part, pick, gap)
+            place(sheets[pick[:sheet]], part, pick, gap, split)
           else
             unplaced << part
           end
         end
         last = sheets.last
         offcut = last ? last[:free].map { |f| [f.w - gap, 0].max * [f.h - gap, 0].max }.max.to_f : 0.0
-        { sheets: sheets, unplaced: unplaced, offcut: offcut }
+        { sheets: sheets, unplaced: unplaced, offcut: offcut, gap: gap }
       end
 
-      def best_spot(sheets, opts, gap)
+      def best_spot(sheets, opts, gap, fit = :area)
         best = nil
         sheets.each_with_index do |sh, si|
           sh[:free].each_with_index do |f, fi|
@@ -179,7 +227,12 @@ module CabinetCraft
               ih = h + gap
               next if iw > f.w + EPS || ih > f.h + EPS
 
-              score = [f.w * f.h - iw * ih, [f.w - iw, f.h - ih].min, si]
+              area = f.w * f.h - iw * ih
+              score = case fit
+                      when :short then [[f.w - iw, f.h - ih].min, area, si]
+                      when :long then [[f.w - iw, f.h - ih].max, area, si]
+                      else [area, [f.w - iw, f.h - ih].min, si]
+                      end
               best = { score: score, sheet: si, free: fi, w: w, h: h, rotated: rot } if best.nil? || (score <=> best[:score]) == -1
             end
           end
@@ -187,14 +240,14 @@ module CabinetCraft
         best
       end
 
-      def place(sheet, part, pick, gap)
+      def place(sheet, part, pick, gap, split = :short)
         f = sheet[:free].delete_at(pick[:free])
         iw = pick[:w] + gap
         ih = pick[:h] + gap
         sheet[:placed] << { part: part, x: f.x, y: f.y, w: pick[:w], h: pick[:h], rotated: pick[:rotated], locked: false }
         right_w = f.w - iw
         top_h = f.h - ih
-        if right_w < top_h # split along the shorter leftover axis
+        if (right_w < top_h) == (split == :short) # :short splits along the shorter leftover axis, :long along the longer
           add_free(sheet[:free], f.x + iw, f.y, right_w, ih)
           add_free(sheet[:free], f.x, f.y + ih, f.w, top_h)
         else
@@ -239,11 +292,13 @@ module CabinetCraft
           cut = CutSequence.compute(placements.map { |p| { 'id' => p['part_id'], 'x' => p['x'] - ctx[:trim], 'y' => p['y'] - ctx[:trim], 'w' => p['w'], 'h' => p['h'] } },
                                     ctx[:uw], ctx[:uh], ctx[:settings]['kerf'], offset: ctx[:trim])
           { 'index' => i, 'placements' => placements, 'used_area' => used.round(1), 'waste_area' => (sheet_area - used).round(1),
-            'utilization' => (used * 100.0 / sheet_area).round(2), 'cut_sequence' => cut }
+            'utilization' => (used * 100.0 / sheet_area).round(2), 'cut_sequence' => cut, 'offcuts' => offcuts(sh[:free], ctx) }
         end
         used = sheets.sum { |s| s['used_area'] }
         total = sheets.size * sheet_area
+        all_offcuts = sheets.flat_map { |sh| sh['offcuts'] }
         {
+          'offcut_count' => all_offcuts.size, 'offcut_area' => all_offcuts.sum { |o| o['w'] * o['h'] }.round(1),
           'material' => ctx[:sheet]['material'], 'sheet_length' => ctx[:sheet]['sheet_length'], 'sheet_width' => ctx[:sheet]['sheet_width'],
           'trim' => ctx[:trim], 'kerf' => ctx[:settings]['kerf'], 'spacing' => ctx[:settings]['spacing'],
           'grain_free' => ctx[:sheet]['grain_free'], 'grain_axis' => ctx[:sheet]['grain_axis'] || 'length', 'sheets' => sheets,
@@ -251,8 +306,45 @@ module CabinetCraft
           'released_locks' => released,
           'total_sheets' => sheets.size, 'total_area' => total.round(1), 'used_area' => used.round(1),
           'waste_area' => (total - used).round(1), 'utilization' => total.zero? ? 0.0 : (used * 100.0 / total).round(2),
-          'algorithm' => 'Guillotine best-area-fit heuristic, best of 4 orderings (not guaranteed optimal)'
+          'algorithm' => 'Guillotine free-rectangle heuristic: best of every sort order x fit rule x split rule plus seeded perturbations (not guaranteed optimal)'
         }
+      end
+
+      # Reusable leftovers of one sheet: the free rectangles (touching ones merged) that are at least `min_offcut` on both sides,
+      # in physical sheet coordinates, biggest first. The cutting gap is already taken off. Free rectangles are guillotine pieces, so
+      # these are rectangles the saw could really release, but an offcut is only as good as the cuts you choose to make.
+      def offcuts(free, ctx)
+        gap = ctx[:gap]
+        min = ctx[:settings]['min_offcut']
+        merge_free(free).filter_map do |f|
+          w = f.w - gap
+          h = f.h - gap
+          next if w < min - EPS || h < min - EPS
+
+          { 'x' => (f.x + ctx[:trim]).round(2), 'y' => (f.y + ctx[:trim]).round(2), 'w' => w.round(2), 'h' => h.round(2) }
+        end.sort_by { |o| [-o['w'] * o['h'], o['y'], o['x']] }
+      end
+
+      # Joins free rectangles that share a full edge, until nothing more can be joined.
+      def merge_free(list)
+        rects = list.map { |f| Free.new(f.x, f.y, f.w, f.h) }
+        loop do
+          pair = rects.combination(2).find do |a, b|
+            (near?(a.x, b.x) && near?(a.w, b.w) && (near?(a.y + a.h, b.y) || near?(b.y + b.h, a.y))) ||
+              (near?(a.y, b.y) && near?(a.h, b.h) && (near?(a.x + a.w, b.x) || near?(b.x + b.w, a.x)))
+          end
+          return rects unless pair
+
+          a, b = pair
+          rects.delete_if { |r| r.equal?(a) || r.equal?(b) }
+          x = [a.x, b.x].min
+          y = [a.y, b.y].min
+          rects << Free.new(x, y, [a.x + a.w, b.x + b.w].max - x, [a.y + a.h, b.y + b.h].max - y)
+        end
+      end
+
+      def near?(a, b)
+        (a - b).abs < 1e-6
       end
 
       # Checks a proposed manual placement against a nesting result (excluding the part itself).

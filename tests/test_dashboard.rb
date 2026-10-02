@@ -126,6 +126,18 @@ class TestDashboard < Minitest::Test
     assert_equal [], d['sheets']['materials']
   end
 
+  def test_production_progress_is_information_and_untracked_is_not_applicable
+    assert_equal 'na', status(build, 'production')
+    prod = { 'stages' => { 'cut' => { 'done' => 3, 'total' => 10 }, 'banded' => { 'done' => 0, 'total' => 2 } }, 'progress' => 12.5, 'complete_parts' => 1, 'parts' => 10 }
+    d = build(production: prod)
+    assert_equal 'info', status(d, 'production')
+    assert_match(/12.5% .* 1 of 10 parts/, d['checks'].find { |c| c['id'] == 'production' }['detail'])
+    assert d['ready'] # progress never blocks readiness
+    assert_equal prod, d['production']
+    zero = build(production: { 'stages' => { 'cut' => { 'done' => 0, 'total' => 5 } }, 'progress' => 0.0, 'complete_parts' => 0, 'parts' => 5 })
+    assert_equal 'na', status(zero, 'production')
+  end
+
   def test_overrides_are_information_not_a_problem
     c = cab('B01').with_overrides('bottom' => { 'length' => 590.0 })
     d = build(cabinets: [c])

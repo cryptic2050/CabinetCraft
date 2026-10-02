@@ -37,6 +37,7 @@
     { id: 'parts', label: 'PARTS', phase: 0 },
     { id: 'nesting', label: 'NESTING', phase: 0 },
     { id: 'labels', label: 'LABELS', phase: 0 },
+    { id: 'production', label: 'PRODUCTION', phase: 0 },
     { id: 'reports', label: 'REPORTS', phase: 0 },
     { id: 'cnc', label: 'CNC', phase: 0 },
     { id: 'assembly', label: 'ASSEMBLY', phase: 0 },
@@ -174,6 +175,7 @@
     else if (S.tab === 'labels') { v.innerHTML = '<p class="mute">Loading...</p>'; loadLabels(); }
     else if (S.tab === 'reports') { v.innerHTML = '<p class="mute">Loading...</p>'; loadReports(); }
     else if (S.tab === 'dashboard') { v.innerHTML = '<p class="mute">Loading...</p>'; loadDashboard(); }
+    else if (S.tab === 'production') { v.innerHTML = '<p class="mute">Loading...</p>'; loadProduction(); }
     else if (S.tab === 'runs') { paintRuns(); }
     else if (S.tab === 'corners') { paintCorners(); }
     else if (S.tab === 'assembly') { v.innerHTML = '<p class="mute">Loading...</p>'; loadAssembly(); }
@@ -381,6 +383,7 @@
       <div class="field"><label>Kerf (${S.unit})</label><input type="number" step="any" id="n_kerf" value="${toDisp(st.kerf)}"></div>
       <div class="field"><label>Edge trim (${S.unit})</label><input type="number" step="any" id="n_trim" value="${toDisp(st.trim)}"></div>
       <div class="field"><label>Extra spacing (${S.unit})</label><input type="number" step="any" id="n_spacing" value="${toDisp(st.spacing)}"></div>
+      <div class="field"><label>Smallest reusable offcut (${S.unit})</label><input type="number" step="any" id="n_minoff" value="${toDisp(st.min_offcut == null ? 150 : st.min_offcut)}"></div>
       <div class="field"><label>Sheet size override (${S.unit}) L x W</label><div class="row"><input type="number" id="n_sl" placeholder="material default" value="${st.sheet_length ? toDisp(st.sheet_length) : ''}" style="width:48%"><input type="number" id="n_sw" value="${st.sheet_width ? toDisp(st.sheet_width) : ''}" style="width:48%"></div></div></div>
       <div class="row" style="padding:0 12px 12px"><button class="primary" id="n_run">NEST MATERIAL</button><button class="ghost" id="n_unlock">Unlock all parts</button></div></div>`;
     if (!n || !n.materials.length) { v.innerHTML = `<h2>NESTING</h2>${form}<div class="card"><h3>Nothing to nest</h3><p>No cabinets in the model yet.</p></div>`; bindNestForm(); return; }
@@ -390,12 +393,12 @@
     const tabs = n.materials.map((x, i) => `<button class="ghost ${i === S.nestMat ? 'on' : ''}" data-mat="${i}">${esc(x.material)} (${x.total_sheets})</button>`).join('');
     const sheetTabs = m.sheets.map((x, i) => `<button class="ghost ${sh && i === sh.index ? 'on' : ''}" data-sheet="${i}">Sheet ${i + 1} &middot; ${x.utilization}%</button>`).join('');
     v.innerHTML = `<h2>NESTING</h2>${form}
-      <div class="row" style="gap:8px;margin-bottom:6px">${stat('TOTAL SHEETS', t.total_sheets)}${stat('TOTAL AREA', m2(t.total_area))}${stat('USED AREA', m2(t.used_area))}${stat('WASTE AREA', m2(t.waste_area))}${stat('UTILIZATION', t.utilization + ' %')}</div>
+      <div class="row" style="gap:8px;margin-bottom:6px">${stat('TOTAL SHEETS', t.total_sheets)}${stat('TOTAL AREA', m2(t.total_area))}${stat('USED AREA', m2(t.used_area))}${stat('WASTE AREA', m2(t.waste_area))}${stat('OFFCUTS', `${t.offcut_count} (${m2(t.offcut_area)})`)}${stat('UTILIZATION', t.utilization + ' %')}</div>
       <p class="mute">${esc(m.algorithm)}. Grain runs along the sheet length${m.grain_free ? '; this material has no grain, so parts may rotate' : ''}.</p>
       <div class="row" style="margin:8px 0">${tabs}</div>
       ${m.unplaced.length ? `<ul class="issues">${m.unplaced.map((u) => `<li class="error"><b>DOES NOT FIT</b> ${esc(u.part_id)} (${fmt(u.length)} x ${fmt(u.width)} ${S.unit}) on a ${fmt(m.sheet_length)} x ${fmt(m.sheet_width)} sheet</li>`).join('')}</ul>` : ''}
       ${m.released_locks.length ? `<ul class="issues">${m.released_locks.map((u) => `<li class="warning"><b>LOCK RELEASED</b> ${esc(u.part_id)}: ${esc(u.reason)}</li>`).join('')}</ul>` : ''}
-      ${sh ? `<div class="row" style="margin:8px 0">${sheetTabs}</div><div class="card" style="padding:6px">${sheetSvg(m, sh)}</div><div id="ninfo"></div>${cutList(sh)}
+      ${sh ? `<div class="row" style="margin:8px 0">${sheetTabs}</div><div class="card" style="padding:6px">${sheetSvg(m, sh)}</div><div id="ninfo"></div>${offcutList(m, sh)}${cutList(sh)}
         <p class="mute">Sheet ${fmt(m.sheet_length)} x ${fmt(m.sheet_width)} ${S.unit}, trim ${fmt(m.trim)}, kerf ${fmt(m.kerf)}. Used ${m2(sh.used_area)}, waste ${m2(sh.waste_area)}. Drag a part to move and lock it; click it for options.</p>` : '<p class="mute">No parts placed.</p>'}
       <h2>EXPORT</h2>${exportButtons('nesting')}`;
     bindNestForm(); bindNestSheet(m, sh); bindExports();
@@ -406,7 +409,7 @@
     const run = $('#n_run'); if (!run) return;
     run.onclick = () => {
       const g = (id) => $(id).value;
-      const o = { kerf: fromDisp(g('#n_kerf')), trim: fromDisp(g('#n_trim')), spacing: fromDisp(g('#n_spacing')) };
+      const o = { kerf: fromDisp(g('#n_kerf')), trim: fromDisp(g('#n_trim')), spacing: fromDisp(g('#n_spacing')), min_offcut: fromDisp(g('#n_minoff')) };
       if (g('#n_sl')) o.sheet_length = fromDisp(g('#n_sl')); if (g('#n_sw')) o.sheet_width = fromDisp(g('#n_sw'));
       loadNesting(o);
     };
@@ -426,8 +429,14 @@
       return `<g class="np ${S.nestSel === p.uid ? 'sel' : ''}" data-uid="${esc(p.uid)}" data-x="${p.x}" data-y="${p.y}" data-w="${p.w}" data-h="${p.h}" data-rot="${p.rotated}">
         <rect x="${p.x}" y="${y}" width="${p.w}" height="${p.h}" fill="hsl(${hue(p.cabinet_label)} 45% 38%)" stroke="${p.locked ? '#f0a030' : '#0b0c0e'}" stroke-width="${p.locked ? fs / 4 : fs / 8}"/>${txt}</g>`;
     }).join('');
+    const off = (sh.offcuts || []).map((o) => `<g pointer-events="none"><rect x="${o.x}" y="${SW - o.y - o.h}" width="${o.w}" height="${o.h}" fill="#3a6b5c" fill-opacity=".25" stroke="#6bd6a8" stroke-dasharray="${fs / 2} ${fs / 3}" stroke-width="${fs / 10}"/>${o.w > fs * 9 && o.h > fs * 2 ? `<text x="${o.x + o.w / 2}" y="${SW - o.y - o.h / 2 + fs / 3}" font-size="${fs * 0.8}" text-anchor="middle" fill="#9fe8c8">offcut ${fmt(o.w)} x ${fmt(o.h)}</text>` : ''}</g>`).join('');
     return `<svg id="nsvg" viewBox="0 0 ${SL} ${SW}" style="width:100%;height:auto;display:block;touch-action:none"><rect width="${SL}" height="${SW}" fill="#2a2418"/>
-      <rect x="${m.trim}" y="${m.trim}" width="${SL - 2 * m.trim}" height="${SW - 2 * m.trim}" fill="#1c1f25" stroke="#6b7480" stroke-dasharray="${fs} ${fs / 2}" stroke-width="${fs / 8}"/>${parts}</svg>`;
+      <rect x="${m.trim}" y="${m.trim}" width="${SL - 2 * m.trim}" height="${SW - 2 * m.trim}" fill="#1c1f25" stroke="#6b7480" stroke-dasharray="${fs} ${fs / 2}" stroke-width="${fs / 8}"/>${off}${parts}</svg>`;
+  }
+  function offcutList(m, sh) {
+    const list = sh.offcuts || [];
+    return `<details><summary>REUSABLE OFFCUTS ON THIS SHEET (${list.length})</summary><div class="card" style="margin:0;border:0">${list.length ? `<table><tr><th>#</th><th>Size (${S.unit})</th><th>Position X, Y</th></tr>${list.map((o, i) => `<tr><td class="num">${i + 1}</td><td>${fmt(o.w)} x ${fmt(o.h)}</td><td class="mute">${fmt(o.x)}, ${fmt(o.y)}</td></tr>`).join('')}</table>` : '<p class="mute">No leftover rectangle is at least the minimum offcut size.</p>'}
+      <p class="mute">Free rectangles left after the guillotine layout, touching ones joined, at least the minimum size on both sides. They are shown dashed on the sheet. Whether you can cut them free depends on your cutting order.</p></div></details>`;
   }
   function cutList(sh) {
     const c = sh.cut_sequence;
@@ -551,7 +560,9 @@
       <div class="field"><label>Origin</label>${sel('m_origin', ['bottom_left', 'bottom_right', 'top_left', 'top_right'].map((o) => [o, label(o)]), machine.origin).replace('<select', builtIn ? '<select disabled' : '<select')}</div>
       <div class="field"><label>Z zero</label>${sel('m_z_zero', [['material_top', 'Top of material'], ['spoilboard', 'Spoilboard']], machine.z_zero).replace('<select', builtIn ? '<select disabled' : '<select')}</div>
       ${f('spindle_rpm', 'Spindle rpm')}${f('feed_cut', 'Cutting feed (mm/min)')}${f('feed_plunge', 'Plunge feed')}${f('feed_drill', 'Drilling feed')}${f('safe_z', 'Safe height above material')}${f('pass_depth', 'Max depth per pass')}${f('cut_extra', 'Cut below material')}${f('decimals', 'Decimals')}
-      ${chkb('canned_cycles', 'Canned drilling cycles (G81)')}${chkb('line_numbers', 'Line numbers')}</div>
+      ${chkb('canned_cycles', 'Canned drilling cycles (G81)')}${chkb('line_numbers', 'Line numbers')}
+      ${chkb('tabs', 'Hold-down tabs on the cut-out pass')}${f('tab_width', 'Tab width (mm)')}${f('tab_height', 'Tab height (mm)')}${f('tab_spacing', 'Tab spacing (mm)')}${f('bed_x', 'Travel X (mm)')}${f('bed_y', 'Travel Y (mm)')}${f('bed_z', 'Travel Z (mm)')}</div>
+      <p class="mute">Tabs keep cut-out parts in place: the cutter lifts over short spans of each edge on the last pass. Tabs are never higher than half the board. Remove and sand them after cutting. Built-in machine: tabs off; save a copy to turn them on.</p>
       <table><thead><tr><th>TOOL</th><th>TYPE</th><th>DIAMETER</th><th></th></tr></thead><tbody>${tools}</tbody></table>
       <div class="row" style="margin-top:8px">${builtIn ? '' : '<button class="ghost" id="m_addtool">Add tool</button><button class="primary" id="m_save">Save machine</button>'}<button class="ghost" id="m_copy">${builtIn ? 'Save as new machine' : 'Save as copy'}</button></div>
       <p class="mute">The router tool diameter must not exceed the nesting kerf: otherwise parts cannot be cut apart (checked above). Each hole diameter needs a matching drill tool.</p></div>
@@ -576,7 +587,7 @@
     const readMachine = (id) => {
       const g = (k) => $('#m_' + k); const o = { id, tools: [] };
       ['name', 'spindle_rpm', 'feed_cut', 'feed_plunge', 'feed_drill', 'safe_z', 'pass_depth', 'cut_extra', 'decimals'].forEach((k) => (o[k] = g(k).value));
-      ['post', 'units', 'origin', 'z_zero'].forEach((k) => (o[k] = g(k).value)); o.canned_cycles = g('canned_cycles').checked; o.line_numbers = g('line_numbers').checked;
+      ['post', 'units', 'origin', 'z_zero'].forEach((k) => (o[k] = g(k).value)); o.canned_cycles = g('canned_cycles').checked; o.line_numbers = g('line_numbers').checked; o.tabs = g('tabs').checked; ['tab_width', 'tab_height', 'tab_spacing', 'bed_x', 'bed_y', 'bed_z'].forEach((k) => (o[k] = g(k).value));
       document.querySelectorAll('[data-tool][data-i]').forEach((el) => { const i = +el.dataset.i; o.tools[i] = o.tools[i] || {}; o.tools[i][el.dataset.tool] = el.value; });
       return o;
     };
@@ -849,6 +860,42 @@
     }).catch(showError);
   }
 
+
+  // ---- Production ------------------------------------------------------------------------------------------
+  function loadProduction() { Promise.all([rpc('production_state'), rpc('nest')]).then(([p, n]) => { S.prod = p; S.prodNest = n; paintProduction(); }).catch(showError); }
+  function prodCall(method, args, msg) { return rpc(method, args).then((p) => { S.prod = p; toast(msg || `Marked ${p.marked} part${p.marked === 1 ? '' : 's'}`); paintProduction(); if (S.prodPart) lookupProdPart(S.prodCode, true); }).catch(showError); }
+  function paintProduction() {
+    const v = $('#view'); const p = S.prod; if (S.tab !== 'production' || !p) return;
+    if (!p.parts) { v.innerHTML = '<h2>PRODUCTION</h2><div class="card"><h3>No parts yet</h3><p>Create cabinets first.</p></div>'; return; }
+    const bars = p.stage_order.map((k) => { const t = p.stages[k]; const pct = t.total ? t.done * 100 / t.total : 0;
+      return `<div class="barrow"><span class="bl">${esc(p.stage_labels[k])}</span><span class="bv">${t.done} / ${t.total}</span><div class="track"><div class="fill" style="width:${pct}%"></div></div></div>`; }).join('');
+    const head = p.stage_order.map((k) => `<th>${esc(p.stage_labels[k])}</th>`).join('');
+    const rows = p.cabinets.map((c) => `<tr><td><b>${esc(c.label)}</b></td><td class="num">${c.parts}</td>${p.stage_order.map((k) => { const t = c.stages[k]; const all = t.total > 0 && t.done === t.total;
+      return `<td>${t.total ? `${t.done}/${t.total} <button class="ghost" data-cab="${esc(c.cabinet_id)}" data-stage="${k}" data-done="${all ? 0 : 1}">${all ? 'clear' : 'all'}</button>` : '<span class="mute">-</span>'}</td>`; }).join('')}</tr>`).join('');
+    const sheets = (S.prodNest && S.prodNest.materials) ? S.prodNest.materials.map((m) => `<tr><td>${esc(m.material)}</td><td>${m.sheets.map((sh, i) => `<button class="ghost" data-sheetmark="${esc(m.material)}|${i}">Sheet ${i + 1} cut</button>`).join(' ')}</td></tr>`).join('') : '';
+    v.innerHTML = `<h2>PRODUCTION</h2><div class="tiles"><div class="tile"><div class="tl">PROGRESS</div><div class="tv">${p.progress}%</div><div class="ts">${p.complete_parts} of ${p.parts} parts complete</div></div></div>
+      <div class="card"><h3>Steps</h3>${bars}<p class="mute">Edge banding applies to parts that have banded edges and drilling to parts that have machining operations. A part resized after it was marked counts as not done.</p></div>
+      <h2>BY CABINET</h2><div class="card"><table><tr><th>Cabinet</th><th>Parts</th>${head}</tr>${rows}</table></div>
+      <h2>BY CUTTING SHEET</h2><div class="card"><table>${sheets || '<tr><td class="mute">Nothing nested.</td></tr>'}</table><p class="mute">Marks every part on that nested sheet as cut.</p></div>
+      <h2>IDENTIFY A PART</h2><div class="card"><div class="row"><input id="pr_code" placeholder="Paste or scan a part code (CC1|...)" style="flex:1;min-width:220px" value="${esc(S.prodCode || '')}"><button class="primary" id="pr_look">Look up</button></div><div id="pr_out"></div></div>`;
+    v.querySelectorAll('[data-cab]').forEach((b) => (b.onclick = () => prodCall('set_cabinet_stage', [b.dataset.cab, b.dataset.stage, b.dataset.done === '1'])));
+    v.querySelectorAll('[data-sheetmark]').forEach((b) => (b.onclick = () => { const [m, i] = b.dataset.sheetmark.split('|'); prodCall('set_sheet_stage', [m, +i, 'cut', true]); }));
+    $('#pr_look').onclick = () => lookupProdPart($('#pr_code').value, false);
+    $('#pr_code').onkeydown = (e) => { if (e.key === 'Enter') lookupProdPart($('#pr_code').value, false); };
+    if (S.prodPart && S.prodCode) lookupProdPart(S.prodCode, true);
+  }
+  function lookupProdPart(code, quiet) {
+    S.prodCode = code; const out = $('#pr_out');
+    rpc('lookup_part', [code]).then((r) => {
+      if (!r.ok) { S.prodPart = null; if (out) out.innerHTML = `<p class="mute">${esc(r.error)}</p>`; return; }
+      S.prodPart = r.part.part_uid; if (!out) return;
+      const stages = r.production.map((s) => s.applies ? `<label style="margin-right:12px"><input type="checkbox" data-pstage="${s.stage}" ${s.done ? 'checked' : ''}> ${esc(s.label)}</label>` : `<span class="mute" style="margin-right:12px">${esc(s.label)}: n/a</span>`).join('');
+      out.innerHTML = `<div class="card" style="margin-top:8px"><h3>${esc(r.part.part_id)} <span class="mute">${esc(r.part.name)}</span></h3><p>${fmt(r.part.length)} x ${fmt(r.part.width)} x ${fmt(r.part.thickness)} ${S.unit} &middot; ${esc(r.part.material)} &middot; edges ${esc(r.part.edge_text)}</p>
+        <div class="row">${stages}</div>${r.assembly_step ? `<p style="margin-top:8px"><b>Assembly step ${r.assembly_step.n}: ${esc(r.assembly_step.title)}</b><br><span class="mute">${esc(r.assembly_step.text)}</span></p>` : ''}</div>`;
+      out.querySelectorAll('[data-pstage]').forEach((c) => (c.onchange = () => prodCall('set_part_stage', [r.part.part_uid, c.dataset.pstage, c.checked], 'Saved')));
+    }).catch(showError);
+  }
+
   // ---- Assembly ---------------------------------------------------------------------------------------
   function loadAssembly(amount) {
     rpc('list').then((l) => {
@@ -915,6 +962,7 @@
     }
     const checks = d.checks.map((k) => { const i = CHECK_ICON[k.status] || CHECK_ICON.na; return `<div class="chk ${i[2]}"><span class="ci" aria-hidden="true">${i[0]}</span><span class="cs">${i[1]}</span><span class="cl"><b>${esc(k.label)}</b><br><span class="mute">${esc(k.detail)}</span></span></div>`; }).join('');
     const issues = d.issues.top.length ? `<ul class="issues">${d.issues.top.map((i) => `<li class="${i.severity} ${i.cabinet_id ? 'pick' : ''}" ${i.cabinet_id ? `data-pick="${esc(i.cabinet_id)}"` : ''}>${i.cabinet_label ? `<b>${esc(i.cabinet_label)}</b> ` : ''}${esc(i.message)}</li>`).join('')}</ul>${d.issues.errors + d.issues.warnings > d.issues.top.length ? `<p class="mute">${d.issues.errors + d.issues.warnings - d.issues.top.length} more in the model check (REPORTS).</p>` : ''}` : '<p class="mute">No problems found.</p>';
+    const pr = d.production && d.production.parts ? `<h3 style="margin-top:12px">Production</h3>${d.production.stage_order.map((k) => { const t = d.production.stages[k]; const pct = t.total ? t.done * 100 / t.total : 0; return `<div class="barrow" title="${esc(d.production.stage_labels[k])}: ${t.done} of ${t.total}"><span class="bl">${esc(d.production.stage_labels[k])}</span><span class="bv">${t.done} / ${t.total}</span><div class="track"><div class="fill" style="width:${pct}%"></div></div></div>`; }).join('')}<p class="mute">${d.production.complete_parts} of ${d.production.parts} parts complete (PRODUCTION tab).</p>` : '';
     const hw = d.hardware.length ? `<table>${d.hardware.map((h) => `<tr><td>${esc(h.name)}</td><td class="num">${h.qty}</td></tr>`).join('')}</table>` : '<p class="mute">No hardware.</p>';
     v.innerHTML = `<h2>DASHBOARD</h2><div class="row" style="margin-bottom:10px"><h3 style="margin:0">${esc(d.project.name)}</h3>
         <span class="ready ${d.ready ? 'ok' : 'error'}"><span class="ci" aria-hidden="true">${d.ready ? '✓' : '✕'}</span> ${d.ready ? 'READY FOR PRODUCTION CHECK' : 'NOT READY'}</span><button class="ghost" id="dash_refresh">Refresh</button></div>
@@ -922,7 +970,7 @@
       <div class="dgrid"><div class="card"><h3>Sheet utilisation</h3>${util}${d.sheets.materials.length ? '<p class="mute">Share of the sheet area covered by parts, per material. The nesting is a heuristic, not proven optimal.</p>' : ''}</div>
       <div class="card"><h3>Cost breakdown</h3>${cost}</div></div>
       <div class="dgrid"><div class="card"><h3>Readiness</h3>${checks}<p class="mute">"Ready" only means none of these checks is an error. It is not a substitute for checking the cutting list, the G-code and the drawings yourself.</p></div>
-      <div class="card"><h3>Problems</h3>${issues}<h3 style="margin-top:12px">Hardware</h3>${hw}</div></div>
+      <div class="card"><h3>Problems</h3>${issues}<h3 style="margin-top:12px">Hardware</h3>${hw}${pr}</div></div>
       <div class="row"><span class="mute">Go to:</span>${[['nesting', 'Nesting'], ['costs', 'Costs'], ['cnc', 'CNC'], ['runs', 'Runs'], ['corners', 'Corners'], ['assembly', 'Assembly'], ['reports', 'Reports']].map(([id, l]) => `<button class="ghost" data-goto="${id}">${l}</button>`).join('')}</div>
       <p class="mute" style="margin-top:8px">The dashboard is recalculated from the model each time you open it; nothing on it is stored.${d.layouts.runs ? ` ${d.layouts.runs} run(s), ${d.layouts.layouts} corner layout(s)${d.layouts.out_of_sync ? `, <b>${d.layouts.out_of_sync} out of sync</b>` : ''}.` : ''}</p>`;
     $('#dash_refresh').onclick = loadDashboard; bindGoto();

@@ -18,7 +18,7 @@ module CabinetCraft
 
       # inputs: cabinets (Cabinet list), type_names { type => name }, nesting (Nesting result or nil), cost (Costing estimate or { 'enabled' => false }),
       # issues (Validator + ModelChecker issues), cnc (cnc_check result or nil), runs / layouts (summaries), materials (Material list)
-      def build(project:, cabinets:, type_names:, nesting:, cost:, issues:, cnc:, runs:, layouts:, materials:)
+      def build(project:, cabinets:, type_names:, nesting:, cost:, issues:, cnc:, runs:, layouts:, materials:, production: nil)
         rows = cabinets.flat_map(&:part_rows)
         {
           'project' => project_block(project, cabinets, rows, type_names),
@@ -27,7 +27,8 @@ module CabinetCraft
           'hardware' => hardware_block(cabinets),
           'issues' => issues_block(issues),
           'layouts' => layouts_block(runs, layouts),
-          'checks' => checks(cabinets, rows, nesting, cost, issues, cnc, runs, layouts, materials)
+          'production' => production,
+          'checks' => checks(cabinets, rows, nesting, cost, issues, cnc, runs, layouts, materials, production)
         }.tap { |d| d['ready'] = d['checks'].none? { |c| c['status'] == 'error' } && !cabinets.empty? }
       end
 
@@ -77,7 +78,7 @@ module CabinetCraft
       end
 
       # status: ok / warn / error / info / na. A project is "ready" when nothing is an error (and it has cabinets).
-      def checks(cabinets, rows, nesting, cost, issues, cnc, runs, layouts, materials)
+      def checks(cabinets, rows, nesting, cost, issues, cnc, runs, layouts, materials, production = nil)
         return [check('empty', 'Project has cabinets', 'error', 'Create a cabinet to get started')] if cabinets.empty?
 
         errors = issues.count { |i| i['severity'] == 'error' }
@@ -90,9 +91,16 @@ module CabinetCraft
         out << cnc_check(cnc)
         out.concat(price_checks(rows, cost, materials))
         out << layout_check(runs, layouts)
+        out << production_check(production)
         over = rows.count { |r| r['status'] != 'AUTO' }
         out << check('overrides', 'Manual overrides', over.positive? ? 'info' : 'ok', over.positive? ? "#{over} part#{'s' unless over == 1} manually overridden" : 'All parts follow the rules')
         out
+      end
+
+      def production_check(production)
+        return check('production', 'Production progress', 'na', 'Not tracked yet (PRODUCTION tab)') if production.nil? || production['stages'].values.all? { |t| t['done'].zero? }
+
+        check('production', 'Production progress', 'info', "#{production['progress']}% of the steps done, #{production['complete_parts']} of #{production['parts']} parts complete")
       end
 
       def cnc_check(cnc)

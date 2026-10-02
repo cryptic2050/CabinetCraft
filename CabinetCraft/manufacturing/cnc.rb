@@ -52,11 +52,28 @@ module CabinetCraft
           issues << err('cnc_no_tool', "No drill of Ø#{d} mm in machine '#{machine['name']}' - add a tool or change the hardware") unless drill_tool(machine, d)
         end
         nest['materials'].each do |m|
+          issues.concat(travel_issues(m, machine)) unless m['sheets'].empty?
           m['sheets'].each do |sh|
             issues.concat(sheet_issues(m, sh, r, machine))
           end
         end
         issues.uniq
+      end
+
+      # The sheet must fit the machine's X / Y travel and the board plus the safe height its Z travel.
+      def travel_issues(m, machine)
+        out = []
+        bx = machine['bed_x'] || MachiningConfig::TRAVEL_DEFAULTS['bed_x']
+        by = machine['bed_y'] || MachiningConfig::TRAVEL_DEFAULTS['bed_y']
+        bz = machine['bed_z'] || MachiningConfig::TRAVEL_DEFAULTS['bed_z']
+        if m['sheet_length'] > bx + EPS || m['sheet_width'] > by + EPS
+          out << err('cnc_exceeds_travel', "#{m['material']}: the sheet (#{m['sheet_length'].round(1)} x #{m['sheet_width'].round(1)} mm) is larger than the travel of machine '#{machine['name']}' (#{bx.round(1)} x #{by.round(1)} mm): use a smaller sheet size or another machine")
+        end
+        thickness = Material.all.find { |mat| mat.name == m['material'] }&.thickness
+        if thickness && thickness + machine['safe_z'] > bz + EPS
+          out << err('cnc_exceeds_travel', "#{m['material']}: #{thickness} mm board plus the #{machine['safe_z']} mm safe height exceeds the Z travel (#{bz.round(1)} mm) of machine '#{machine['name']}'")
+        end
+        out
       end
 
       def sheet_issues(m, sh, router, machine)
@@ -74,7 +91,7 @@ module CabinetCraft
           out << err('cnc_kerf_too_small', "#{m['material']} sheet #{sh['index'] + 1}: #{close.size} pairs of parts are closer than the router (\u00D8#{d} mm); closest is #{a['part_id']} / #{b['part_id']} at #{gap.round(2)} mm - raise the nesting kerf/spacing to at least #{d}")
         end
         pl.each do |p|
-          out << warn('cnc_small_part', "#{p['part_id']} is #{[p['w'], p['h']].min.round(1)} mm wide: it may move when cut free (tabs are not generated)") if [p['w'], p['h']].min < SMALL_PART
+          out << warn('cnc_small_part', "#{p['part_id']} is #{[p['w'], p['h']].min.round(1)} mm wide: it may move when cut free (tabs are not generated)") if !machine['tabs'] && [p['w'], p['h']].min < SMALL_PART
           r = d / 2.0
           if p['x'] - r < -EPS || p['y'] - r < -EPS || p['x'] + p['w'] + r > m['sheet_length'] + EPS || p['y'] + p['h'] + r > m['sheet_width'] + EPS
             out << warn('cnc_outside_sheet', "#{p['part_id']}: the cutting path leaves the sheet edge (raise the trim to at least #{r})")
@@ -112,10 +129,12 @@ module CabinetCraft
           y = sw - y if %w[top_left top_right].include?(machine['origin'])
           [x.round(3), y.round(3)]
         end
+        tabs = tab_config(machine, thickness)
+        tab_note = tabs ? "Tabs: #{tabs[:width]} mm wide, #{tabs[:height].round(2)} mm high, about every #{tabs[:spacing]} mm (remove and sand them after cutting)." : 'No tabs or hold-down logic generated.'
         events = [{ 't' => 'comment', 'text' => "#{m['material']} #{thickness}mm, sheet #{sh['index'] + 1}, #{sl} x #{sw}, face #{face_up.upcase} up" },
-                  { 't' => 'comment', 'text' => 'No tabs or hold-down logic generated. Origin: ' + machine['origin'].tr('_', ' ') + ', Z0 at ' + machine['z_zero'].tr('_', ' ') },
+                  { 't' => 'comment', 'text' => "#{tab_note} Origin: " + machine['origin'].tr('_', ' ') + ', Z0 at ' + machine['z_zero'].tr('_', ' ') },
                   { 't' => 'rapid', 'x' => nil, 'y' => nil, 'z' => safe }]
-        stats = { 'drills' => 0, 'routes' => 0, 'tool_changes' => 0 }
+        stats = { 'drills' => 0, 'routes' => 0, 'tool_changes' => 0, 'tabs' => 0 }
 
         holes = sheet_holes(sh, ops_by_uid).select { |h| h['side'] == face_up }
         holes.group_by { |h| h['dia'] }.sort.each do |dia, hs|
@@ -149,7 +168,8 @@ module CabinetCraft
               z = (top - depth * (i + 1) / passes.to_f).round(3)
               z = ((top - thickness) - machine['cut_extra']).round(3) if i == passes - 1
               events << { 't' => 'linear', 'x' => sx, 'y' => sy, 'z' => z, 'f' => machine['feed_plunge'] }
-              path[1..].each { |x, y| events << { 't' => 'linear', 'x' => x, 'y' => y, 'z' => z, 'f' => machine['feed_cut'] } }
+              tab_z = tabs ? (top - thickness + tabs[:height]).round(3) : nil
+              stats['tabs'] += path_events(events, path, z, tab_z && z < tab_z - 1e-6 ? tabs.merge(z: tab_z) : nil, machine, r)
             end
             events << { 't' => 'rapid', 'x' => sx, 'y' => sy, 'z' => safe }
             stats['routes'] += 1
@@ -157,6 +177,48 @@ module CabinetCraft
         end
         events << { 't' => 'end', 'safe' => safe }
         [events, stats]
+      end
+
+      # Tab settings for this material, or nil when the machine has tabs off. Tabs never leave less than half the board uncut.
+      def tab_config(machine, thickness)
+        return nil unless machine['tabs']
+
+        { width: machine['tab_width'].to_f, height: [machine['tab_height'].to_f, thickness / 2.0].min, spacing: machine['tab_spacing'].to_f }
+      end
+
+      # Cutting moves along a closed path at depth z. With `tabs` the cutter rises to tabs[:z] over short spans of each edge
+      # (kept clear of the corners). Returns the number of tabs made.
+      def path_events(events, path, z, tabs, machine, radius)
+        count = 0
+        path.each_cons(2) do |(x0, y0), (x1, y1)|
+          len = Math.hypot(x1 - x0, y1 - y0)
+          spans = tabs ? tab_spans(len, tabs, radius) : []
+          at = ->(d) { [(x0 + (x1 - x0) * d / len).round(3), (y0 + (y1 - y0) * d / len).round(3)] }
+          spans.each do |a, b|
+            ax, ay = at.call(a)
+            bx, by = at.call(b)
+            events << { 't' => 'linear', 'x' => ax, 'y' => ay, 'z' => z, 'f' => machine['feed_cut'] }
+            events << { 't' => 'linear', 'x' => ax, 'y' => ay, 'z' => tabs[:z], 'f' => machine['feed_cut'] }
+            events << { 't' => 'linear', 'x' => bx, 'y' => by, 'z' => tabs[:z], 'f' => machine['feed_cut'] }
+            events << { 't' => 'linear', 'x' => bx, 'y' => by, 'z' => z, 'f' => machine['feed_plunge'] }
+            count += 1
+          end
+          events << { 't' => 'linear', 'x' => x1, 'y' => y1, 'z' => z, 'f' => machine['feed_cut'] }
+        end
+        count
+      end
+
+      # [[from, to], ...] distances along an edge of length `len` where a tab sits: at least one tab margin away from each corner,
+      # about every tabs[:spacing] mm, and never closer together than a tab width apart.
+      def tab_spans(len, tabs, radius)
+        w = tabs[:width]
+        margin = [w, 2 * radius].max
+        usable = len - 2 * margin
+        return [] if usable < w
+
+        n = [[(len / tabs[:spacing]).round, 1].max, (usable / (2 * w)).floor].min
+        n = [n, 1].max
+        Array.new(n) { |i| c = margin + usable * (i + 0.5) / n; [c - w / 2.0, c + w / 2.0] }
       end
 
       def tool_event(tool, machine)

@@ -25,11 +25,19 @@ module CabinetCraft
 
     PATTERN_ROLES = %w[side bottom back brace shelf fixed_shelf divider toe_kick door drawer_front drawer_box].freeze
 
+    # Hold-down tabs on the cut-out pass (off by default). Width and spacing are measured along the cutting path.
+    TAB_DEFAULTS = { 'tabs' => false, 'tab_width' => 10.0, 'tab_height' => 3.0, 'tab_spacing' => 500.0 }.freeze
+    # Machine travel: a program for a sheet that does not fit in X / Y, or a board too thick for the spindle travel, cannot run.
+    TRAVEL_DEFAULTS = { 'bed_x' => 3050.0, 'bed_y' => 1550.0, 'bed_z' => 150.0 }.freeze
+    MACHINE_EXTRAS = TAB_DEFAULTS.merge(TRAVEL_DEFAULTS).freeze
+
     DEFAULT_MACHINE = {
       'id' => 'default_router', 'name' => 'Generic 3-axis router (mm)', 'post' => 'iso', 'units' => 'mm',
       'origin' => 'bottom_left', 'z_zero' => 'material_top', 'spindle_rpm' => 18_000, 'feed_cut' => 5000.0,
       'feed_plunge' => 1500.0, 'feed_drill' => 1500.0, 'safe_z' => 15.0, 'pass_depth' => 9.0, 'cut_extra' => 0.3,
       'decimals' => 3, 'line_numbers' => false, 'canned_cycles' => true,
+      'tabs' => false, 'tab_width' => 10.0, 'tab_height' => 3.0, 'tab_spacing' => 500.0,
+      'bed_x' => 3050.0, 'bed_y' => 1550.0, 'bed_z' => 150.0,
       'tools' => [
         { 'number' => 1, 'kind' => 'router', 'diameter' => 8.0 },
         { 'number' => 2, 'kind' => 'drill', 'diameter' => 5.0 }, { 'number' => 3, 'kind' => 'drill', 'diameter' => 7.0 },
@@ -175,7 +183,32 @@ module CabinetCraft
         'safe_z' => num.call('safe_z', 2, 100), 'pass_depth' => num.call('pass_depth', 1, 30), 'cut_extra' => num.call('cut_extra', 0, 3),
         'decimals' => num.call('decimals', 1, 5).round, 'line_numbers' => raw['line_numbers'] ? true : false,
         'canned_cycles' => raw['canned_cycles'] ? true : false, 'tools' => tools.sort_by { |t| t['number'] }
-      }
+      }.merge(normalize_tabs(raw)).merge(normalize_travel(raw))
+    end
+
+    # Machines saved before tabs existed have no tab keys: they keep the defaults (tabs off).
+    def normalize_tabs(raw)
+      out = { 'tabs' => raw['tabs'] ? true : false }
+      { 'tab_width' => [2.0, 50.0], 'tab_height' => [0.5, 10.0], 'tab_spacing' => [100.0, 3000.0] }.each do |k, (lo, hi)|
+        v = raw[k].nil? || raw[k].to_s.empty? ? TAB_DEFAULTS[k] : Float(raw[k])
+        raise ArgumentError, "#{k} must be between #{lo} and #{hi}" unless v.between?(lo, hi)
+
+        out[k] = v
+      end
+      out
+    rescue TypeError
+      raise ArgumentError, 'Tab settings must be numbers'
+    end
+
+    def normalize_travel(raw)
+      { 'bed_x' => [300.0, 10_000.0], 'bed_y' => [300.0, 5000.0], 'bed_z' => [20.0, 500.0] }.to_h do |k, (lo, hi)|
+        v = raw[k].nil? || raw[k].to_s.empty? ? TRAVEL_DEFAULTS[k] : Float(raw[k])
+        raise ArgumentError, "#{k} must be between #{lo} and #{hi}" unless v.between?(lo, hi)
+
+        [k, v]
+      end
+    rescue TypeError
+      raise ArgumentError, 'Machine travel must be numbers'
     end
 
     def enum_val(v, allowed)
@@ -225,7 +258,7 @@ module CabinetCraft
       @settings = DEFAULT_SETTINGS.merge((d['settings'] || {}).select { |k, v| DEFAULT_SETTINGS.key?(k) && v.is_a?(Numeric) })
       @patterns = Array(d['patterns'])
       @posts = Array(d['posts'])
-      @machines = Array(d['machines']).each { |m| raise ArgumentError, 'bad machine' unless m['id'] && m['tools'] }
+      @machines = Array(d['machines']).map { |m| raise ArgumentError, 'bad machine' unless m.is_a?(Hash) && m['id'] && m['tools']; MACHINE_EXTRAS.merge(m) }
       @active = d['active'] || DEFAULT_MACHINE['id']
     rescue JSON::ParserError, ArgumentError, TypeError
       @settings = DEFAULT_SETTINGS.dup # corrupt settings must never block the plugin

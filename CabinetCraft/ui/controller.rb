@@ -22,6 +22,8 @@ require_relative '../core/run_planner'
 require_relative '../core/run'
 require_relative 'layout_commands'
 require_relative 'overview_commands'
+require_relative 'production_commands'
+require_relative '../manufacturing/production'
 require_relative '../manufacturing/dashboard'
 require_relative '../manufacturing/assembly'
 require_relative '../exporters/assembly_svg'
@@ -43,6 +45,7 @@ module CabinetCraft
     class Controller
       include LayoutCommands
       include OverviewCommands
+      include ProductionCommands
 
       PUBLIC_METHODS = %w[bootstrap preview create update select list parts_list cutting_list hardware_state
                           add_hardware delete_hardware set_hinge_rules set_hardware_setting
@@ -55,6 +58,7 @@ module CabinetCraft
                           cost_state save_cost_settings set_hardware_price
                           assembly_state explode_cabinet assemble_cabinet plan_run create_run runs_state restretch_run unlink_run
                           plan_corner create_corner_layout layouts_state unlink_layout restretch_layout dashboard_state
+                          production_state set_part_stage set_cabinet_stage set_sheet_stage
                           machining_state set_machining_setting add_pattern delete_pattern select_machine save_machine
                           delete_machine save_post delete_post cnc_check cnc_preview match_nesting_to_router].freeze
 
@@ -846,6 +850,21 @@ module CabinetCraft
         cfg = Manufacturing::Nesting.normalize_settings(store.nest_settings)
         rows = Manufacturing::PartsList.build(project_cabinets)
         locks = store.locks
+        key = nest_cache_key(cfg, rows, locks)
+        return @nest_cache[1] if @nest_cache && @nest_cache[0] == key
+
+        result = compute_nest(cfg, rows, locks)
+        @nest_cache = [key, result]
+        result
+      end
+
+      # Everything the packing depends on (the search is deterministic), so identical requests are answered from memory.
+      def nest_cache_key(cfg, rows, locks)
+        mats = rows.map { |r| r['material_id'] }.uniq.sort.map { |id| m = Material.find(id); [id, m&.sheet_length, m&.sheet_width, m&.grain] }
+        JSON.generate([cfg, rows.map { |r| [r['part_uid'], r['part_id'], r['name'], r['length'], r['width'], r['grain'], r['material'], r['material_id'], r['cabinet_label']] }, locks, mats])
+      end
+
+      def compute_nest(cfg, rows, locks)
         materials = rows.group_by { |r| r['material'] }.sort_by(&:first).map do |label, mrows|
           mat = Material.find(mrows.first['material_id'])
           sheet = { 'material' => label, 'grain_free' => mat.nil? || mat.grain == :none, 'grain_axis' => mat&.grain == :width ? 'width' : 'length',
@@ -860,7 +879,8 @@ module CabinetCraft
         { 'settings' => cfg, 'materials' => materials,
           'totals' => { 'total_sheets' => materials.sum { |m| m['total_sheets'] }, 'total_area' => total.round(1), 'used_area' => used.round(1),
                         'waste_area' => (total - used).round(1), 'utilization' => total.zero? ? 0.0 : (used * 100.0 / total).round(2),
-                        'unplaced' => materials.sum { |m| m['unplaced'].size } } }
+                        'unplaced' => materials.sum { |m| m['unplaced'].size }, 'offcut_count' => materials.sum { |m| m['offcut_count'] },
+                        'offcut_area' => materials.sum { |m| m['offcut_area'] }.round(1) } }
       end
 
       # Makes the nesting gap (kerf + spacing) at least the router diameter and the trim at least its radius, so a program
@@ -941,7 +961,11 @@ module CabinetCraft
 
         cab = project_cabinets.find { |c| c.id == parsed[0] } or return { 'ok' => false, 'error' => 'That cabinet is not in this model' }
         row = cab.part_rows.find { |r| r['key'] == parsed[1] } or return { 'ok' => false, 'error' => "#{cab.label} has no part '#{parsed[1]}' any more" }
-        { 'ok' => true, 'cabinet' => cab.summary, 'part' => row, 'hardware' => cab.hardware.select { |h| h['part_key'] == row['key'] } }
+        _, ops = production_inputs
+        step = Manufacturing::Assembly.steps(cab).find { |s| s['parts'].include?(row['part_id']) }
+        { 'ok' => true, 'cabinet' => cab.summary, 'part' => row, 'hardware' => cab.hardware.select { |h| h['part_key'] == row['key'] },
+          'production' => Manufacturing::Production.part_status(row, project_store.production, ops),
+          'assembly_step' => step && { 'n' => step['n'], 'title' => step['title'], 'text' => step['text'] } }
       end
 
       def validate

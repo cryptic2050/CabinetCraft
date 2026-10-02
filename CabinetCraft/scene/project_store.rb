@@ -87,6 +87,15 @@ module CabinetCraft
         @model.set_attribute(DICT, 'runs', JSON.generate(hash))
       end
 
+      # Production progress: { part_uid => { 'sig' => size, 'stages' => { stage => iso time } } } (see Manufacturing::Production).
+      def production
+        read_json('production')
+      end
+
+      def production=(hash)
+        @model.set_attribute(DICT, 'production', JSON.generate(hash))
+      end
+
       # Corner layouts: { layout_id => layout hash } (see CornerLayout::Record).
       def layouts
         read_json('layouts')

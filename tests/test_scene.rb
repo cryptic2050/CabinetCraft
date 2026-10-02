@@ -1756,7 +1756,10 @@ class TestDashboardScene < Minitest::Test
     CabinetCraft::Manufacturing::Nesting.singleton_class.prepend(counter)
     @c.dashboard_state
     assert_equal 2, calls # one nesting run = one call per material
-    @c.nest # outside the dashboard the memo is gone
+    @c.nest # and the identical request afterwards is answered from the nesting cache
+    assert_equal 2, calls
+    @c.create('base_single_door', {}) # a real change recomputes
+    @c.nest
     assert_equal 4, calls
   end
 
@@ -1955,5 +1958,148 @@ class TestCuttingListUsesNesting < Minitest::Test
     Sketchup.reset_model!
     e = CabinetCraft::Interface::Controller.new.cutting_list
     assert_equal 0, e['part_count']
+  end
+end
+
+class TestNestCache < Minitest::Test
+  def setup
+    Sketchup.reset_model!
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    CabinetCraft::Material.config = CabinetCraft::MaterialConfig.new
+    @c = CabinetCraft::Interface::Controller.new
+    @c.create('base_double_door', {})
+    @calls = 0
+    calls = -> { @calls += 1 }
+    CabinetCraft::Manufacturing::Nesting.singleton_class.prepend(Module.new { define_method(:nest) { |*a| calls.call; super(*a) } })
+  end
+
+  def test_identical_requests_are_answered_from_memory
+    a = @c.nest
+    n = @calls
+    assert_operator n, :>=, 1
+    b = @c.nest
+    @c.cutting_list
+    @c.cost_estimate
+    assert_equal n, @calls
+    assert_equal a, b
+  end
+
+  def recomputed
+    before = @calls
+    yield
+    @calls > before
+  end
+
+  def test_any_input_change_recomputes
+    @c.nest
+    assert recomputed { @c.create('base_single_door', {}) && @c.nest }, 'a new cabinet'
+    assert recomputed { @c.nest('kerf' => 6) }, 'a nesting setting'
+    refute recomputed { @c.nest('kerf' => 6) }, 'the same setting again'
+    uid = @c.nest['materials'].find { |m| m['material'] == '18mm MDF' }['sheets'][0]['placements'][0]['uid']
+    assert recomputed { @c.nest_lock_current(uid) }, 'locking a part'
+    assert recomputed { @c.nest_unlock(uid) }, 'unlocking it'
+    assert recomputed { CabinetCraft::Material.config.save('id' => 'mdf_18', 'sheet_length' => 2800, 'sheet_width' => 2070) && @c.nest }, 'a material sheet size'
+    assert_equal 2800.0, @c.nest['materials'].find { |m| m['material'] == '18mm MDF' }['sheet_length']
+  end
+
+  def test_totals_include_the_offcuts_and_they_add_up
+    r = @c.nest('min_offcut' => 100)
+    t = r['totals']
+    assert_equal r['materials'].sum { |m| m['offcut_count'] }, t['offcut_count']
+    assert_in_delta r['materials'].sum { |m| m['offcut_area'] }, t['offcut_area'], 0.2
+    assert_equal 100.0, r['settings']['min_offcut']
+    assert_operator t['offcut_area'], :<=, t['waste_area']
+  end
+end
+
+class TestProductionScene < Minitest::Test
+  def setup
+    Sketchup.reset_model!
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    CabinetCraft::Material.config = CabinetCraft::MaterialConfig.new
+    @c = CabinetCraft::Interface::Controller.new
+    @c.create('base_double_door', {})
+    @c.create('base_drawer_3', {})
+    @model = Sketchup.active_model
+  end
+
+  def uid(label, key)
+    @c.parts_list['rows'].find { |r| r['part_id'] == "#{label}-#{key.upcase}" }['part_uid']
+  end
+
+  def starts
+    @model.instance_variable_get(:@ops).count { |o| o.first == :start }
+  end
+
+  def test_empty_state_has_no_progress
+    s = @c.production_state
+    assert_equal [0.0, 0], [s['progress'], s['complete_parts']]
+    assert_equal %w[cut banded drilled assembled], s['stage_order']
+    assert_equal 2, s['cabinets'].size
+  end
+
+  def test_marking_a_part_is_one_undo_step_and_persists_in_the_model
+    n = starts
+    r = @c.set_part_stage(uid('B01', 'bottom'), 'cut', true)
+    assert_equal n + 1, starts
+    assert_equal 1, r['marked']
+    assert_equal 1, r['stages']['cut']['done']
+    again = CabinetCraft::Interface::Controller.new.production_state
+    assert_equal 1, again['stages']['cut']['done'] # stored in the model, not in the controller
+    @c.set_part_stage(uid('B01', 'bottom'), 'cut', false)
+    assert_equal 0, @c.production_state['stages']['cut']['done']
+  end
+
+  def test_marking_a_whole_cabinet_skips_stages_that_do_not_apply
+    r = @c.set_cabinet_stage(@c.list['cabinets'][0]['id'], 'banded', true)
+    s = @c.production_state
+    banded_parts = @c.parts_list['rows'].select { |x| x['cabinet_label'] == 'B01' && !x['edge_codes'].empty? }.size
+    assert_equal banded_parts, r['marked']
+    assert_equal banded_parts, s['stages']['banded']['done']
+    assert_equal s['cabinets'][0]['stages']['banded']['total'], s['cabinets'][0]['stages']['banded']['done']
+    assert_equal 0, s['cabinets'][1]['stages']['banded']['done']
+  end
+
+  def test_marking_a_nesting_sheet_marks_its_parts
+    m = @c.nest['materials'].find { |x| x['material'] == '18mm MDF' }
+    placed = m['sheets'][0]['placements'].size
+    r = @c.set_sheet_stage('18mm MDF', 0, 'cut', true)
+    assert_equal placed, r['marked']
+    assert_equal placed, r['stages']['cut']['done']
+  end
+
+  def test_a_part_resized_after_cutting_is_no_longer_done
+    @c.set_cabinet_stage(@c.list['cabinets'][0]['id'], 'cut', true)
+    cut = @c.production_state['stages']['cut']['done']
+    cab = @c.list['cabinets'][0]
+    @c.update(cab['id'], cab['params'].merge('width' => 700))
+    assert_operator @c.production_state['stages']['cut']['done'], :<, cut
+  end
+
+  def test_errors
+    assert_raises(ArgumentError) { @c.set_part_stage('nope', 'cut') }
+    assert_raises(ArgumentError) { @c.set_part_stage(uid('B01', 'bottom'), 'painted') }
+    assert_raises(ArgumentError) { @c.set_cabinet_stage('nope', 'cut') }
+    assert_raises(ArgumentError) { @c.set_sheet_stage('18mm MDF', 99, 'cut') }
+    assert_raises(ArgumentError) { @c.set_sheet_stage('Unobtainium', 0, 'cut') }
+    assert_equal 0, @c.production_state['stages']['cut']['done']
+  end
+
+  def test_a_scan_shows_the_stage_status_and_the_assembly_step
+    cab = @c.list['cabinets'][0]
+    @c.set_part_stage(uid('B01', 'side_left'), 'cut', true)
+    code = "CC1|#{cab['id']}|side_left"
+    r = @c.lookup_part(code)
+    assert r['ok']
+    assert_equal [true, false], r['production'].first(2).map { |x| x['done'] }.then { |a| [a[0], a[1]] }
+    assert_equal 'Join bottom and sides', r['assembly_step']['title']
+    assert r['assembly_step']['n'] >= 1
+  end
+
+  def test_the_dashboard_could_show_progress_data_without_extra_calls
+    @c.set_cabinet_stage(@c.list['cabinets'][0]['id'], 'cut', true)
+    s = @c.production_state
+    assert_operator s['progress'], :>, 0
+    assert_equal s['parts'], @c.parts_list['rows'].size
   end
 end
