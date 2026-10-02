@@ -1714,3 +1714,70 @@ class TestCornerLayoutScene < Minitest::Test
     assert @c.restretch_layout(res['layout']['id'], 2700, nil, 'keep')['updated']
   end
 end
+
+class TestDashboardScene < Minitest::Test
+  def setup
+    Sketchup.reset_model!
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    CabinetCraft::Material.config = CabinetCraft::MaterialConfig.new
+    @c = CabinetCraft::Interface::Controller.new
+    @model = Sketchup.active_model
+  end
+
+  def test_empty_model_is_not_ready_and_does_not_crash
+    d = @c.dashboard_state
+    assert_equal [false, 0], [d['ready'], d['project']['cabinets']]
+    assert_equal ['empty'], d['checks'].map { |c| c['id'] }
+  end
+
+  def test_dashboard_figures_equal_the_figures_of_the_other_tabs
+    @c.create('base_double_door', {})
+    @c.create('base_drawer_3', {})
+    @c.set_hardware_price('hinge_standard', 3)
+    @c.save_cost_settings('margin_pct' => 30, 'labour_rate' => 25, 'labour_hours_per_cabinet' => 2)
+    d = @c.dashboard_state
+    nest = @c.nest
+    assert_equal nest['totals']['total_sheets'], d['sheets']['total']
+    assert_equal nest['totals']['utilization'], d['sheets']['utilization']
+    est = @c.cost_estimate
+    assert_equal est['total_cost'], d['cost']['total_cost']
+    assert_equal est['selling_price'], d['cost']['selling_price']
+    assert_in_delta est['total_cost'], d['cost']['segments'].sum { |s| s['value'] }, 0.02
+    assert_equal @c.parts_list['rows'].size, d['project']['parts']
+    assert_equal @c.validate['summary']['errors'], d['issues']['errors']
+    assert_equal @c.validate['summary']['warnings'], d['issues']['warnings']
+    assert_equal @c.cnc_check['errors'], d['checks'].find { |c| c['id'] == 'cnc' }['detail'].to_s[/\A(\d+) error/, 1].to_i
+  end
+
+  def test_dashboard_nests_only_once
+    @c.create('base_cabinet', {}) # two materials: carcass and back
+    calls = 0
+    counter = Module.new { define_method(:nest) { |*a| calls += 1; super(*a) } }
+    CabinetCraft::Manufacturing::Nesting.singleton_class.prepend(counter)
+    @c.dashboard_state
+    assert_equal 2, calls # one nesting run = one call per material
+    @c.nest # outside the dashboard the memo is gone
+    assert_equal 4, calls
+  end
+
+  def test_dashboard_reports_runs_and_layout_state_and_a_deleted_cabinet
+    res = @c.create_run(2400, [{ 'type' => 'base_cabinet' }, { 'type' => 'base_cabinet' }, { 'type' => 'base_cabinet' }])
+    d = @c.dashboard_state
+    assert_equal({ 'runs' => 1, 'layouts' => 0, 'out_of_sync' => 0 }, d['layouts'])
+    @model.entities.grep(Sketchup::Group).last.erase!
+    d2 = @c.dashboard_state
+    assert_equal 1, d2['layouts']['out_of_sync']
+    assert_equal 'warn', d2['checks'].find { |c| c['id'] == 'layouts' }['status']
+    assert_equal res['runs'].first['id'], @c.runs_state['runs'].first['id']
+  end
+
+  def test_a_model_error_blocks_readiness
+    @c.create('base_cabinet', {})
+    g = @model.entities.grep(Sketchup::Group).first
+    g.entities.grep(Sketchup::Group).first.erase! # a part deleted from the model
+    d = @c.dashboard_state
+    assert_equal 'error', d['checks'].find { |c| c['id'] == 'model' }['status']
+    refute d['ready']
+    assert_operator d['issues']['errors'], :>=, 1
+  end
+end

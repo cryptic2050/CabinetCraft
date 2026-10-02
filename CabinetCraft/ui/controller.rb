@@ -21,6 +21,8 @@ require_relative '../manufacturing/costing'
 require_relative '../core/run_planner'
 require_relative '../core/run'
 require_relative 'layout_commands'
+require_relative 'overview_commands'
+require_relative '../manufacturing/dashboard'
 require_relative '../manufacturing/assembly'
 require_relative '../exporters/assembly_svg'
 require_relative '../exporters/dxf_exporter'
@@ -40,6 +42,7 @@ module CabinetCraft
     # call it directly. Every public method returns a JSON-safe Hash.
     class Controller
       include LayoutCommands
+      include OverviewCommands
 
       PUBLIC_METHODS = %w[bootstrap preview create update select list parts_list cutting_list hardware_state
                           add_hardware delete_hardware set_hinge_rules set_hardware_setting
@@ -51,7 +54,7 @@ module CabinetCraft
                           save_preset delete_preset standards_state save_standards reset_standards
                           cost_state save_cost_settings set_hardware_price
                           assembly_state explode_cabinet assemble_cabinet plan_run create_run runs_state restretch_run unlink_run
-                          plan_corner create_corner_layout layouts_state unlink_layout restretch_layout
+                          plan_corner create_corner_layout layouts_state unlink_layout restretch_layout dashboard_state
                           machining_state set_machining_setting add_pattern delete_pattern select_machine save_machine
                           delete_machine save_post delete_post cnc_check cnc_preview].freeze
 
@@ -801,6 +804,8 @@ module CabinetCraft
 
       # Nests every material in the model. Passing `settings` validates and saves them first.
       def nest(settings = nil)
+        return @nest_memo if @nest_memo && (settings.nil? || settings.empty?)
+
         store = project_store
         if settings && !settings.empty?
           clean = Manufacturing::Nesting.normalize_settings(settings)

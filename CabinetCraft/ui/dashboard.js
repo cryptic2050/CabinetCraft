@@ -25,6 +25,7 @@
 
   // ---- State ----------------------------------------------------------------
   const SECTIONS = [
+    { id: 'dashboard', label: 'DASHBOARD', phase: 0 },
     { id: 'project', label: 'PROJECT', phase: 0 },
     { id: 'cabinets', label: 'CABINETS', phase: 0 },
     { id: 'templates', label: 'TEMPLATES', phase: 0 },
@@ -172,6 +173,7 @@
     else if (S.tab === 'nesting') { v.innerHTML = '<p class="mute">Loading...</p>'; loadNesting(); }
     else if (S.tab === 'labels') { v.innerHTML = '<p class="mute">Loading...</p>'; loadLabels(); }
     else if (S.tab === 'reports') { v.innerHTML = '<p class="mute">Loading...</p>'; loadReports(); }
+    else if (S.tab === 'dashboard') { v.innerHTML = '<p class="mute">Loading...</p>'; loadDashboard(); }
     else if (S.tab === 'runs') { paintRuns(); }
     else if (S.tab === 'corners') { paintCorners(); }
     else if (S.tab === 'assembly') { v.innerHTML = '<p class="mute">Loading...</p>'; loadAssembly(); }
@@ -884,6 +886,49 @@
     $('#as_assemble').onclick = () => rpc('assemble_cabinet', [S.asmId]).then((r) => { S.asm = r; paintAssembly(); toast('Assembled'); }).catch(showError);
   }
 
+
+  // ---- Dashboard -------------------------------------------------------------------------------------------
+  const CHECK_ICON = { ok: ['✓', 'PASS', 'ok'], warn: ['!', 'WARNING', 'warn'], error: ['✕', 'ERROR', 'error'], info: ['i', 'NOTE', 'info'], na: ['–', 'N/A', 'na'] };
+  function loadDashboard() { rpc('dashboard_state').then((d) => { S.dash = d; paintDashboard(); }).catch(showError); }
+  function money(cur, n) { return (cur.length === 1 ? cur : cur + ' ') + Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+  function paintDashboard() {
+    const v = $('#view'); const d = S.dash; if (S.tab !== 'dashboard' || !d) return;
+    if (!d.project.cabinets) { v.innerHTML = `<h2>DASHBOARD</h2><div class="card"><h3>${esc(d.project.name)}</h3><p>This project has no cabinets yet.</p><button class="primary" data-goto="cabinets">Create a cabinet</button></div>`; bindGoto(); return; }
+    const tile = (label, value, sub) => `<div class="tile"><div class="tl">${label}</div><div class="tv">${value}</div><div class="ts">${sub || '&nbsp;'}</div></div>`;
+    const c = d.cost;
+    const tiles = tile('CABINETS', d.project.cabinets, d.project.types.map((t) => `${t.count} ${esc(t.name)}`).slice(0, 2).join(', ') + (d.project.types.length > 2 ? ', ...' : ''))
+      + tile('PARTS', d.project.parts, d.project.overridden_parts ? `${d.project.overridden_parts} manually overridden` : 'all automatic')
+      + tile('SHEETS', d.sheets.total, d.sheets.unplaced ? `<b class="neg">${d.sheets.unplaced} part(s) do not fit</b>` : `${d.sheets.utilization}% used`)
+      + (c.enabled ? tile('SELLING PRICE', money(c.currency, c.selling_price), `cost ${money(c.currency, c.total_cost)}`) : tile('COSTS', 'off', 'switched off in COSTS'));
+    const util = d.sheets.materials.length ? d.sheets.materials.map((m) => `<div class="barrow" title="${esc(m.material)}: ${m.sheets} sheet(s), ${m.utilization}% of the sheet area used">
+        <span class="bl">${esc(m.material)}</span><span class="bv">${m.utilization}% <span class="mute">&middot; ${m.sheets} sheet${m.sheets === 1 ? '' : 's'}</span></span><div class="track"><div class="fill" style="width:${Math.min(100, m.utilization)}%"></div></div></div>`).join('') : '<p class="mute">Nothing to nest.</p>';
+    let cost = '<p class="mute">Cost calculation is switched off for this project (COSTS tab).</p>';
+    if (c.enabled) {
+      const total = c.segments.reduce((a, x) => a + x.value, 0);
+      const segs = c.segments.filter((x) => x.value > 0);
+      cost = total > 0 ? `<div class="stack" role="img" aria-label="Cost breakdown">${segs.map((x) => { const k = c.segments.indexOf(x) + 1; const pct = x.value * 100 / total;
+        return `<div class="seg" style="flex:${x.value};background:var(--s${k})" title="${esc(x.label)}: ${money(c.currency, x.value)} (${pct.toFixed(1)}%)">${pct >= 14 ? `${pct.toFixed(0)}%` : ''}</div>`; }).join('')}</div>
+        <table class="legend"><tr><th>Category</th><th class="num">Amount</th><th class="num">Share</th></tr>${c.segments.map((x, i) => `<tr><td><span class="swatch" style="background:var(--s${i + 1})"></span>${esc(x.label)}</td><td class="num">${money(c.currency, x.value)}</td><td class="num">${total ? (x.value * 100 / total).toFixed(1) : '0.0'}%</td></tr>`).join('')}</table>
+        <p class="mute">Total cost ${money(c.currency, c.total_cost)}; profit ${money(c.currency, c.profit)}. ${c.warnings ? `<b>${c.warnings} cost warning(s)</b>: some inputs have no price (COSTS tab).` : ''}</p>`
+        : `<p class="mute">Every cost is zero: set material and hardware prices (MATERIALS, HARDWARE) to see a breakdown.${c.warnings ? ` ${c.warnings} cost warning(s).` : ''}</p>`;
+    }
+    const checks = d.checks.map((k) => { const i = CHECK_ICON[k.status] || CHECK_ICON.na; return `<div class="chk ${i[2]}"><span class="ci" aria-hidden="true">${i[0]}</span><span class="cs">${i[1]}</span><span class="cl"><b>${esc(k.label)}</b><br><span class="mute">${esc(k.detail)}</span></span></div>`; }).join('');
+    const issues = d.issues.top.length ? `<ul class="issues">${d.issues.top.map((i) => `<li class="${i.severity} ${i.cabinet_id ? 'pick' : ''}" ${i.cabinet_id ? `data-pick="${esc(i.cabinet_id)}"` : ''}>${i.cabinet_label ? `<b>${esc(i.cabinet_label)}</b> ` : ''}${esc(i.message)}</li>`).join('')}</ul>${d.issues.errors + d.issues.warnings > d.issues.top.length ? `<p class="mute">${d.issues.errors + d.issues.warnings - d.issues.top.length} more in the model check (REPORTS).</p>` : ''}` : '<p class="mute">No problems found.</p>';
+    const hw = d.hardware.length ? `<table>${d.hardware.map((h) => `<tr><td>${esc(h.name)}</td><td class="num">${h.qty}</td></tr>`).join('')}</table>` : '<p class="mute">No hardware.</p>';
+    v.innerHTML = `<h2>DASHBOARD</h2><div class="row" style="margin-bottom:10px"><h3 style="margin:0">${esc(d.project.name)}</h3>
+        <span class="ready ${d.ready ? 'ok' : 'error'}"><span class="ci" aria-hidden="true">${d.ready ? '✓' : '✕'}</span> ${d.ready ? 'READY FOR PRODUCTION CHECK' : 'NOT READY'}</span><button class="ghost" id="dash_refresh">Refresh</button></div>
+      <div class="tiles">${tiles}</div>
+      <div class="dgrid"><div class="card"><h3>Sheet utilisation</h3>${util}${d.sheets.materials.length ? '<p class="mute">Share of the sheet area covered by parts, per material. The nesting is a heuristic, not proven optimal.</p>' : ''}</div>
+      <div class="card"><h3>Cost breakdown</h3>${cost}</div></div>
+      <div class="dgrid"><div class="card"><h3>Readiness</h3>${checks}<p class="mute">"Ready" only means none of these checks is an error. It is not a substitute for checking the cutting list, the G-code and the drawings yourself.</p></div>
+      <div class="card"><h3>Problems</h3>${issues}<h3 style="margin-top:12px">Hardware</h3>${hw}</div></div>
+      <div class="row"><span class="mute">Go to:</span>${[['nesting', 'Nesting'], ['costs', 'Costs'], ['cnc', 'CNC'], ['runs', 'Runs'], ['corners', 'Corners'], ['assembly', 'Assembly'], ['reports', 'Reports']].map(([id, l]) => `<button class="ghost" data-goto="${id}">${l}</button>`).join('')}</div>
+      <p class="mute" style="margin-top:8px">The dashboard is recalculated from the model each time you open it; nothing on it is stored.${d.layouts.runs ? ` ${d.layouts.runs} run(s), ${d.layouts.layouts} corner layout(s)${d.layouts.out_of_sync ? `, <b>${d.layouts.out_of_sync} out of sync</b>` : ''}.` : ''}</p>`;
+    $('#dash_refresh').onclick = loadDashboard; bindGoto();
+    v.querySelectorAll('[data-pick]').forEach((li) => (li.onclick = () => rpc('select_target', [li.dataset.pick]).then(() => toast('Selected in the model')).catch(showError)));
+  }
+  function bindGoto() { document.querySelectorAll('[data-goto]').forEach((b) => (b.onclick = () => { S.tab = b.dataset.goto; render(); })); }
+
   // ---- Costs ---------------------------------------------------------------------------------------
   function loadCosts() { rpc('cost_state').then((c) => { S.costs = c; paintCosts(); }).catch(showError); }
   function paintCosts() {
@@ -1086,7 +1131,7 @@
       S.boot = b;
       S.boot.standards = b.standards; setLibrary(b.library, b.schemas || {});
       S.params = Object.assign({}, S.boot.defaults[S.type]); S.cabinets = b.cabinets;
-      if (b.selected) loadCabinet(b.selected); else render();
+      if (b.selected) loadCabinet(b.selected); else { if (b.cabinets && b.cabinets.length) S.tab = 'dashboard'; render(); }
     }).catch((e) => { $('#view').innerHTML = `<div class="card"><h3>Cannot connect</h3><p>${esc(e.message)}</p></div>`; });
   }
   document.addEventListener('DOMContentLoaded', start);

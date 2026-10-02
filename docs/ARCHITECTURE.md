@@ -193,5 +193,6 @@ cabinetcraft/
 | 8 | Corner logic (`core/corner_layout.rb`, `ui/layout_commands.rb`, CORNERS tab): two walls at 90 degrees, a corner of kind none / blind / L-shaped, a linked run along each wall (run B is turned 90 degrees), plan-view drawing, create and re-plan both runs in one undo step, layouts remembered in the model | IMPLEMENTED |
 | 8 | Corner cabinet templates (L-shaped corner base, blind corner base) installable from the template library | IMPLEMENTED |
 | 8 | Outside corners, walls that are not at 90 degrees, door swing / handle clearance checks, mirrored (right-hand) layouts, changing the corner kind of an existing layout, wall cabinets and tall units in a corner, filler-strip cabinets, adding or removing cabinets in an existing run | PLANNED |
+| 9 | Project dashboard (`manufacturing/dashboard.rb`, `ui/overview_commands.rb`, DASHBOARD tab): KPI tiles, sheet utilisation bars, cost breakdown, readiness checklist (model check, nesting, machining, prices, runs), problem list, hardware totals. Derived on demand, nothing stored; the nesting is computed once per dashboard | IMPLEMENTED |
 | - | All other library cabinets (wall, tall, wardrobe, vanity, TV, corner...) | PLANNED - listed, not selectable |
 | - | PLACEHOLDER | none: no control exists that does nothing |
