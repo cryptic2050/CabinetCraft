@@ -69,6 +69,15 @@ module CabinetCraft
         @model.set_attribute(DICT, 'cost_settings', JSON.generate(hash))
       end
 
+      # Linked runs: { run_id => run hash } (see Run). Untrusted data: unreadable entries are skipped by the caller.
+      def runs
+        read_json('runs')
+      end
+
+      def runs=(hash)
+        @model.set_attribute(DICT, 'runs', JSON.generate(hash))
+      end
+
       private
 
       def read_json(key)

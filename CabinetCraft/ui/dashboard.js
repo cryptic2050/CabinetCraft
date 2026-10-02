@@ -653,12 +653,12 @@
       <td><input type="number" step="any" data-rf="min" data-n="${n}" value="${toDisp(it.min)}" ${it.fixed ? 'disabled' : ''} style="width:70px"></td>
       <td><input type="number" step="any" data-rf="max" data-n="${n}" value="${toDisp(it.max)}" ${it.fixed ? 'disabled' : ''} style="width:70px"></td>
       <td><button class="ghost" data-rdel="${n}">&times;</button></td></tr>`).join('');
-    v.innerHTML = `<h2>RUNS</h2><p class="mute">A run fills a wall with cabinets side by side. Fixed cabinets keep their width; the others share the rest equally within their min/max. Creating a run adds ordinary cabinets (one undo step) to the right of the existing ones; it is a creation tool, the cabinets are not linked afterwards. Lengths are in ${S.unit}.</p>
+    v.innerHTML = `<h2>RUNS</h2><p class="mute">A run fills a wall with cabinets side by side. Fixed cabinets keep their width; the others share the rest equally within their min/max. Creating a run adds ordinary cabinets (one undo step) to the right of the existing ones and remembers the run (see LINKED RUNS below), so the wall length can be changed later. Lengths are in ${S.unit}.</p>
       <div class="card"><div class="row"><label class="mute">Wall length (${S.unit})</label><input type="number" step="any" id="run_len" value="${toDisp(r.length)}" style="width:110px"></div>
       <table style="margin-top:8px"><tr><th>#</th><th>Cabinet</th><th></th><th>Width</th><th>Min</th><th>Max</th><th></th></tr>${rows}</table>
       <div class="row" style="margin-top:8px"><button class="ghost" id="run_add">Add cabinet</button><button class="ghost" id="run_plan">Calculate</button><button class="primary" id="run_create">Create run in model</button></div></div>
-      <div id="run_result"></div>`;
-    bindRuns(); paintRunPlan();
+      <div id="run_result"></div><h2>LINKED RUNS</h2><div id="linked"><p class="mute">Loading...</p></div>`;
+    bindRuns(); paintRunPlan(); loadLinked();
   }
   function paintRunPlan() {
     const el = $('#run_result'); const r = runState(); const p = r.plan; if (!el || !p) return;
@@ -684,7 +684,49 @@
     $('#run_add').onclick = () => { re(); runState().items.push({ type: 'base_cabinet', fixed: false, width: '', min: 300, max: 900 }); paintRuns(); };
     document.querySelectorAll('[data-rdel]').forEach((b) => (b.onclick = () => { re(); runState().items.splice(+b.dataset.rdel, 1); paintRuns(); }));
     $('#run_plan').onclick = () => { re(true); rpc('plan_run', runPayload()).then((p) => { runState().plan = p; paintRunPlan(); }).catch(showError); };
-    $('#run_create').onclick = () => { re(true); rpc('create_run', runPayload()).then((res) => { runState().plan = res.plan; paintRunPlan(); refreshList(); toast(`Created ${res.created.length} cabinets`); }).catch(showError); };
+    $('#run_create').onclick = () => { re(true); rpc('create_run', runPayload()).then((res) => { runState().plan = res.plan; paintRunPlan(); refreshList(); S.linked = res.runs; paintLinked(); toast(`Created ${res.created.length} cabinets`); }).catch(showError); };
+  }
+
+
+  // ---- Linked runs (Quick Stretch) ---------------------------------------------------------------------
+  function loadLinked() { rpc('runs_state').then((r) => { S.linked = r.runs; paintLinked(); }).catch(showError); }
+  const RUN_STATUS = { ok: ['impl', 'IN SYNC'], resized: ['warnb', 'RESIZED'], moved: ['warnb', 'MOVED'], missing: ['warnb', 'MISSING'] };
+  function paintLinked() {
+    const el = $('#linked'); if (!el || S.tab !== 'runs') return;
+    const runs = S.linked || [];
+    if (!runs.length) { el.innerHTML = '<p class="mute">No linked runs yet. Runs you create above are remembered here, so you can change the wall length later and the whole row resizes.</p>'; return; }
+    el.innerHTML = runs.map((r) => {
+      const rows = r.members.map((m) => { const st = RUN_STATUS[m.status] || RUN_STATUS.ok; return `<tr><td class="num">${m.n}</td><td>${m.label ? esc(m.label) : '<i>deleted</i>'}</td>
+        <td class="num">${m.width == null ? '-' : fmt(m.width)}${m.expected_width != null && m.status === 'resized' ? ` <span class="mute">(plan ${fmt(m.expected_width)})</span>` : ''}</td>
+        <td><label><input type="checkbox" data-lf="fixed" data-run="${esc(r.id)}" data-n="${m.n - 1}" ${m.fixed ? 'checked' : ''}> pin</label></td>
+        <td><input type="number" step="any" data-lf="min" data-run="${esc(r.id)}" data-n="${m.n - 1}" value="${toDisp(m.min)}" style="width:70px"></td>
+        <td><input type="number" step="any" data-lf="max" data-run="${esc(r.id)}" data-n="${m.n - 1}" value="${toDisp(m.max)}" style="width:70px"></td>
+        <td><span class="badge ${st[0]}">${st[1]}</span></td></tr>`; }).join('');
+      return `<div class="card" data-runcard="${esc(r.id)}"><h3>${esc(r.name)} <span class="badge ${r.in_sync ? 'impl' : 'warnb'}">${r.in_sync ? 'IN SYNC' : 'OUT OF SYNC'}</span></h3>
+        <div class="row"><label class="mute">Wall length (${S.unit})</label><input type="number" step="any" data-rlen="${esc(r.id)}" value="${toDisp(r.length)}" style="width:110px">
+        <button class="primary" data-restretch="${esc(r.id)}">Re-plan &amp; resize</button><button class="ghost" data-unlink="${esc(r.id)}">Unlink</button></div>
+        <table style="margin-top:8px"><tr><th>#</th><th>Cabinet</th><th>Width</th><th></th><th>Min</th><th>Max</th><th></th></tr>${rows}</table>
+        ${r.leftover > 0 ? `<p class="mute">${fmt(r.leftover)} ${S.unit} of the wall is empty (cabinets at maximum width).</p>` : ''}
+        ${r.in_sync ? '' : '<p class="mute">Some cabinets were resized, moved or deleted since the run was planned. Re-plan to put them back in line (deleted cabinets cannot be restored: unlink and create the run again).</p>'}
+        <div class="pending" data-pending="${esc(r.id)}"></div></div>`;
+    }).join('') + '<p class="mute">Re-plan resizes every member cabinet and places them edge to edge starting at the first cabinet. Pinned cabinets keep their width. Assumes the cabinets are not rotated. One undo step. Unlinking keeps the cabinets.</p>';
+    el.querySelectorAll('[data-restretch]').forEach((b) => (b.onclick = () => restretch(b.dataset.restretch, null)));
+    el.querySelectorAll('[data-unlink]').forEach((b) => (b.onclick = () => rpc('unlink_run', [b.dataset.unlink]).then((r) => { S.linked = r.runs; paintLinked(); toast('Run unlinked; cabinets kept'); }).catch(showError)));
+  }
+  function restretch(runId, mode) {
+    const card = document.querySelector(`[data-runcard="${runId}"]`); const run = S.linked.find((r) => r.id === runId);
+    const rules = run.members.map(() => ({}));
+    card.querySelectorAll('[data-lf]').forEach((i) => { const r = rules[+i.dataset.n]; const k = i.dataset.lf; if (k === 'fixed') r.fixed = i.checked; else r[k] = fromDisp(i.value); });
+    const len = fromDisp(card.querySelector('[data-rlen]').value);
+    rpc('restretch_run', [runId, len, rules, mode]).then((res) => {
+      if (res.needs_confirmation) {
+        card.querySelector('[data-pending]').innerHTML = `<div class="card" style="border-color:var(--warn)"><h3>This resize affects manual overrides</h3><ul style="margin:6px 0 10px 16px;padding:0">${res.affected.map((a) => `<li><b>${esc(a.part_id)}</b> ${esc(a.field)} is manually set to <b>${fmt(a.override)}</b>; the automatic value would change ${fmt(a.auto_old)} &rarr; ${fmt(a.auto_new)} ${S.unit}.</li>`).join('')}</ul>
+          <div class="row"><button class="primary" data-mode="keep">Keep my overrides</button><button class="ghost" data-mode="reset">Reset them to AUTO</button><button class="ghost" data-mode="cancel">Cancel</button></div><p class="mute">Nothing has been changed yet.</p></div>`;
+        card.querySelectorAll('[data-mode]').forEach((b) => (b.onclick = () => (b.dataset.mode === 'cancel' ? paintLinked() : restretch(runId, b.dataset.mode))));
+        return;
+      }
+      S.linked = res.runs; paintLinked(); refreshList(); toast('Run resized');
+    }).catch(showError);
   }
 
   // ---- Assembly ---------------------------------------------------------------------------------------

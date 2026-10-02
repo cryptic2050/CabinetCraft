@@ -19,6 +19,7 @@ require_relative '../manufacturing/machining'
 require_relative '../manufacturing/cnc'
 require_relative '../manufacturing/costing'
 require_relative '../core/run_planner'
+require_relative '../core/run'
 require_relative '../manufacturing/assembly'
 require_relative '../exporters/assembly_svg'
 require_relative '../exporters/dxf_exporter'
@@ -46,7 +47,7 @@ module CabinetCraft
                           library_state templates_state validate_template save_template delete_template install_example
                           save_preset delete_preset standards_state save_standards reset_standards
                           cost_state save_cost_settings set_hardware_price
-                          assembly_state explode_cabinet assemble_cabinet plan_run create_run
+                          assembly_state explode_cabinet assemble_cabinet plan_run create_run runs_state restretch_run unlink_run
                           machining_state set_machining_setting add_pattern delete_pattern select_machine save_machine
                           delete_machine save_post delete_post cnc_check cnc_preview].freeze
 
@@ -382,8 +383,138 @@ module CabinetCraft
           end
           snapshot_materials
           snapshot_templates
+          run = Run.build(name: next_run_name, length: length, items: list.each_with_index.map { |it, n| run_item(it, created[n]['id'], plan['widths'][n]) })
+          save_run(run)
         end
-        { 'ok' => true, 'created' => created, 'plan' => plan }
+        { 'ok' => true, 'created' => created, 'plan' => plan, 'runs' => runs_state['runs'] }
+      end
+
+      def run_item(item, cabinet_id, width)
+        { 'cabinet_id' => cabinet_id, 'fixed' => item['fixed'] ? true : false, 'width' => item['fixed'] ? width : nil, 'min' => item['min'] || RunPlanner::DEFAULT_MIN,
+          'max' => item['max'] || RunPlanner::DEFAULT_MAX }
+      end
+
+      # --- Linked runs ---------------------------------------------------------------------------
+
+      def stored_runs
+        project_store.runs.values.filter_map { |raw| Run.from_h(raw) }
+      end
+
+      def save_run(run)
+        all = project_store.runs
+        all[run.id] = run.to_h
+        project_store.runs = all
+      end
+
+      def next_run_name
+        used = stored_runs.filter_map { |r| r.name[/\AR(\d+)\z/, 1]&.to_i }
+        format('R%<n>02d', n: (used.max || 0) + 1)
+      end
+
+      # Every stored run with the state of its member cabinets in the model:
+      # ok / missing (deleted) / resized (width differs from the plan) / moved (not where the plan puts it).
+      def runs_state
+        { 'runs' => stored_runs.map { |r| run_summary(r) } }
+      end
+
+      def run_summary(run)
+        plan = (run.plan rescue nil) # rubocop:disable Style/RescueModifier
+        found = run.items.map { |i| Scene::Registry.find(model, i['cabinet_id']) }
+        base = found.first&.first&.then { |g| Units.from_sketchup(g.bounds.min.x) } # positions are judged against the first cabinet
+        x = 0.0
+        members = run.items.each_with_index.map do |item, n|
+          group, cab = found[n]
+          expected_w = plan && plan['widths'][n]
+          expected_x = base ? base + x : nil
+          x += expected_w.to_f
+          status = if cab.nil? then 'missing'
+                   elsif expected_w && (cab.params['width'].to_f - expected_w).abs > 0.01 then 'resized'
+                   elsif expected_x && (Units.from_sketchup(group.bounds.min.x) - expected_x).abs > 0.5 then 'moved'
+                   else 'ok'
+                   end
+          { 'n' => n + 1, 'cabinet_id' => item['cabinet_id'], 'label' => cab&.label, 'type' => cab&.type, 'fixed' => item['fixed'], 'min' => item['min'], 'max' => item['max'],
+            'width' => cab&.params&.fetch('width', nil), 'expected_width' => expected_w, 'status' => status }
+        end
+        { 'id' => run.id, 'name' => run.name, 'length' => run.length, 'members' => members, 'in_sync' => members.all? { |m| m['status'] == 'ok' },
+          'leftover' => plan && plan['leftover'], 'fits' => plan ? plan['ok'] : false }
+      end
+
+      def unlink_run(run_id)
+        all = project_store.runs
+        raise ArgumentError, 'That run no longer exists' unless all.key?(run_id)
+
+        in_operation('CabinetCraft: Unlink run', reidentify: false) do
+          all.delete(run_id)
+          project_store.runs = all
+        end
+        runs_state
+      end
+
+      # Quick Stretch: re-plans the run for a new wall length (and optionally new per-cabinet rules), resizes the member
+      # cabinets and puts them edge to edge again, starting where the first cabinet currently is. One undo step.
+      # rules: index-aligned [{ 'fixed' => bool, 'width' => mm, 'min' => mm, 'max' => mm }] (partial hashes allowed).
+      # mode: 'keep' / 'reset' decides what happens to manual overrides a new width would change (as in `update`).
+      def restretch_run(run_id, length, rules = nil, mode = nil)
+        run = stored_runs.find { |r| r.id == run_id } or raise ArgumentError, 'That run no longer exists'
+        rules = rules&.each_with_index&.map { |r, n| fixed_with_current_width(run, r, n) }
+        updated = run.with(length: length, rules: rules)
+        plan = updated.plan
+        raise ArgumentError, plan['issues'].first.to_s unless plan['ok']
+
+        members = updated.items.map { |i| Scene::Registry.find(model, i['cabinet_id']) }
+        missing = members.each_index.select { |n| members[n].nil? }
+        raise ArgumentError, "Cabinet #{missing.first + 1} of this run is no longer in the model: unlink the run and create it again" if missing.any?
+
+        prepared = stretch_prepare(members, plan['widths'], mode)
+        return prepared if prepared.is_a?(Hash)
+
+        base = Units.from_sketchup(members.first[0].bounds.min.x)
+        in_operation('CabinetCraft: Resize run', reidentify: false) do
+          stretch_apply(prepared, base)
+          save_run(updated)
+        end
+        { 'ok' => true, 'updated' => true, 'plan' => plan, 'runs' => runs_state['runs'] }
+      end
+
+      # Making a cabinet fixed without giving a width pins it at the width it has now.
+      def fixed_with_current_width(run, rule, index)
+        return rule unless rule && rule['fixed'] && rule['width'].to_s.strip.empty? && run.items[index]['width'].nil?
+
+        _, cab = Scene::Registry.find(model, run.items[index]['cabinet_id'])
+        cab ? rule.merge('width' => cab.params['width']) : rule
+      end
+
+      # => Array of [group, new_cabinet_or_nil, width] or a Hash reply when the caller must confirm / the plan is invalid.
+      def stretch_prepare(members, widths, mode)
+        affected_all = []
+        out = members.each_with_index.map do |(group, cab), n|
+          next [group, nil, widths[n]] if (cab.params['width'].to_f - widths[n]).abs < 1e-9
+
+          prev = preview(cab.type, cab.params.merge('width' => widths[n]), cab.label, cab.id)
+          raise ArgumentError, "#{cab.label}: #{prev['issues'].find { |i| i['severity'] == 'error' }&.fetch('message', nil) || 'invalid'}" unless prev['ok']
+
+          overrides = cab.overrides
+          unless overrides.empty?
+            affected = Overrides.affected(cab.auto_panels, cab.with_params(prev['params']).auto_panels, overrides)
+            affected_all.concat(affected.map { |a| a.merge('part_id' => "#{cab.label}-#{a['part_key'].upcase}") })
+            overrides = Overrides.reset_affected(overrides, affected) if mode == 'reset' && affected.any?
+          end
+          [group, cab.with_params(prev['params'], overrides: overrides), widths[n]]
+        end
+        return { 'ok' => false, 'updated' => false, 'needs_confirmation' => true, 'affected' => affected_all } if affected_all.any? && !%w[keep reset].include?(mode)
+
+        out
+      end
+
+      def stretch_apply(prepared, base)
+        x = base
+        prepared.each do |group, new_cab, width|
+          Generators::CabinetGenerator.rebuild(group, new_cab) if new_cab
+          delta = x - Units.from_sketchup(group.bounds.min.x)
+          group.transform!(Geom::Transformation.translation(Geom::Vector3d.new(Units.to_sketchup(delta), 0, 0))) if delta.abs > 1e-6
+          x += width
+        end
+        snapshot_materials
       end
 
       def run_items(items)

@@ -1340,3 +1340,136 @@ class TestRunScene < Minitest::Test
     assert_equal false, @c.plan_run(1000, [{ 'type' => 'zzz' }])['ok']
   end
 end
+
+class TestLinkedRuns < Minitest::Test
+  def setup
+    Sketchup.reset_model!
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    @c = CabinetCraft::Interface::Controller.new
+    @model = Sketchup.active_model
+    @res = @c.create_run(2400, [{ 'type' => 'base_single_door' }, { 'type' => 'base_drawer_3' }, { 'type' => 'base_double_door' }])
+    @run = @res['runs'].first
+  end
+
+  def Units_mm(mm)
+    mm / 25.4
+  end
+
+  def groups
+    @model.entities.grep(Sketchup::Group)
+  end
+
+  def spans
+    groups.map { |g| [(g.bounds.min.x * 25.4).round(6), (g.bounds.max.x * 25.4).round(6)] }.sort
+  end
+
+  def test_run_is_stored_with_members_and_in_sync
+    assert_equal 'R01', @run['name']
+    assert_equal 2400, @run['length']
+    assert_equal 3, @run['members'].size
+    assert @run['in_sync']
+    assert_equal [800, 800, 800], @run['members'].map { |m| m['width'] }
+    assert_equal ['R01'], CabinetCraft::Interface::Controller.new.runs_state['runs'].map { |r| r['name'] } # persisted in the model
+    assert_equal 'R02', @c.create_run(1200, [{ 'type' => 'base_cabinet' }, { 'type' => 'base_cabinet' }])['runs'].last['name']
+  end
+
+  def test_quick_stretch_resizes_all_members_and_keeps_them_edge_to_edge
+    r = @c.restretch_run(@run['id'], 2700)
+    assert r['updated']
+    assert_equal [900, 900, 900], r['runs'].first['members'].map { |m| m['width'] }
+    s = spans
+    assert_in_delta 0, s.first[0], 1e-6
+    s.each_cons(2) { |a, b| assert_in_delta a[1], b[0], 1e-6 }
+    assert_in_delta 2700, s.last[1], 1e-6
+    assert r['runs'].first['in_sync']
+    assert_equal 2700, @c.runs_state['runs'].first['length']
+  end
+
+  def test_stretch_down_and_back_restores_the_original_sizes
+    @c.restretch_run(@run['id'], 1800)
+    assert_equal [600, 600, 600], @c.runs_state['runs'].first['members'].map { |m| m['width'] }
+    @c.restretch_run(@run['id'], 2400)
+    assert_equal [800, 800, 800], @c.runs_state['runs'].first['members'].map { |m| m['width'] }
+    assert_in_delta 2400, spans.last[1], 1e-6
+  end
+
+  def test_rules_can_pin_one_cabinet_and_the_others_compensate
+    r = @c.restretch_run(@run['id'], 2400, [nil, { 'fixed' => true, 'width' => 600 }, nil])
+    assert_equal [900, 600, 900], r['runs'].first['members'].map { |m| m['width'] }
+    assert_equal [false, true, false], r['runs'].first['members'].map { |m| m['fixed'] }
+    again = @c.restretch_run(@run['id'], 2000) # the pin persists
+    assert_equal [700, 600, 700], again['runs'].first['members'].map { |m| m['width'] }
+  end
+
+  def test_pinning_without_a_width_uses_the_current_width
+    r = @c.restretch_run(@run['id'], 2400, [{ 'fixed' => true }, nil, nil])
+    assert_equal 800, r['runs'].first['members'].first['width']
+    assert_equal true, r['runs'].first['members'].first['fixed']
+  end
+
+  def test_a_row_that_does_not_fit_changes_nothing
+    before = spans
+    assert_raises(ArgumentError) { @c.restretch_run(@run['id'], 700) } # 3 x 300 minimum = 900
+    assert_equal before, spans
+    assert_equal [800, 800, 800], @c.runs_state['runs'].first['members'].map { |m| m['width'] }
+    assert_equal 2400, @c.runs_state['runs'].first['length']
+  end
+
+  def test_status_flags_resized_moved_and_missing_cabinets
+    ids = @run['members'].map { |m| m['cabinet_id'] }
+    cab = @c.list['cabinets'].find { |c| c['id'] == ids[1] }
+    @c.update(cab['id'], cab['params'].merge('width' => 700))
+    st = @c.runs_state['runs'].first
+    assert_equal %w[ok resized], st['members'].first(2).map { |m| m['status'] }
+    assert_equal false, st['in_sync']
+    @c.restretch_run(@run['id'], 2400) # re-plan puts everything right again
+    assert @c.runs_state['runs'].first['in_sync']
+    third = groups.find { |g| g.get_attribute('CabinetCraft', 'cabinet_id') == ids[2] }
+    third.transform!(Geom::Transformation.new(Geom::Point3d.new(Units_mm(50), 0, 0)))
+    assert_equal 'moved', @c.runs_state['runs'].first['members'].last['status']
+    third.erase!
+    assert_equal 'missing', @c.runs_state['runs'].first['members'].last['status']
+    err = assert_raises(ArgumentError) { @c.restretch_run(@run['id'], 2400) }
+    assert_match(/no longer in the model/, err.message)
+  end
+
+  def test_the_run_follows_the_first_cabinet_when_it_was_moved
+    ids = @run['members'].map { |m| m['cabinet_id'] }
+    groups.each { |g| g.transform!(Geom::Transformation.new(Geom::Point3d.new(Units_mm(1000), 0, 0))) } # user moved the whole row
+    assert @c.runs_state['runs'].first['in_sync']
+    @c.restretch_run(@run['id'], 2700)
+    s = spans
+    assert_in_delta 1000, s.first[0], 1e-6
+    assert_in_delta 3700, s.last[1], 1e-6
+    assert_equal ids, @c.runs_state['runs'].first['members'].map { |m| m['cabinet_id'] }
+  end
+
+  def test_manual_overrides_ask_before_a_stretch_changes_them
+    id = @run['members'][0]['cabinet_id']
+    @c.set_override(id, 'side_left', 'length' => 650)
+    r = @c.restretch_run(@run['id'], 2700)
+    refute r['ok'] if r.key?('needs_confirmation')
+    if r['needs_confirmation']
+      assert_equal [800, 800, 800], @c.runs_state['runs'].first['members'].map { |m| m['width'] }
+      assert @c.restretch_run(@run['id'], 3000, nil, 'keep')['updated']
+    end
+    assert_equal [900, 900, 900], @c.runs_state['runs'].first['members'].map { |m| m['width'] }
+  end
+
+  def test_one_undo_step_and_unlink_keeps_the_cabinets
+    n = @model.instance_variable_get(:@ops).count { |o| o.first == :start }
+    @c.restretch_run(@run['id'], 2700)
+    assert_equal n + 1, @model.instance_variable_get(:@ops).count { |o| o.first == :start }
+    assert_equal [], @c.unlink_run(@run['id'])['runs']
+    assert_equal 3, groups.size
+    assert_raises(ArgumentError) { @c.unlink_run(@run['id']) }
+    assert_raises(ArgumentError) { @c.restretch_run(@run['id'], 2400) }
+  end
+
+  def test_corrupt_stored_runs_are_ignored
+    @model.set_attribute('CabinetCraft_Project', 'runs', '{"x":{"id":5},"y":"junk","z":{"id":"a","items":[]}}')
+    assert_equal [], @c.runs_state['runs']
+    @model.set_attribute('CabinetCraft_Project', 'runs', 'not json')
+    assert_equal [], @c.runs_state['runs']
+  end
+end
