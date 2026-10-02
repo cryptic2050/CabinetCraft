@@ -1,0 +1,114 @@
+# frozen_string_literal: true
+
+require_relative 'hardware'
+
+module CabinetCraft
+  # Rule-based hardware placement. Pure: (params, rule-engine values, panels) in,
+  # hardware items + issues out. Nothing here is stored in the model; it is
+  # always derived from the cabinet parameters and the current hardware config,
+  # so a changed door height or rule table updates quantities automatically.
+  module HardwareRules
+    Result = Struct.new(:items, :issues)
+
+    module_function
+
+    # Hinge cup positions measured from the bottom edge of a door.
+    def hinge_positions(door_height, count, inset)
+      return [(door_height / 2.0).round(1)] if count == 1
+
+      inset = [inset, door_height / 4.0].min
+      step = (door_height - 2 * inset) / (count - 1)
+      Array.new(count) { |i| (inset + i * step).round(1) }
+    end
+
+    # First half of the doors hinge on the left, the rest on the right; a single
+    # door follows the hinge_side parameter.
+    def hinge_side(index, total, param)
+      return param if total == 1
+
+      index < total / 2 ? 'left' : 'right'
+    end
+
+    def compute(params, values, panels, config = Hardware.config)
+      st = config.settings
+      items = []
+      issues = []
+      add = lambda do |id, qty, part_key, detail = nil|
+        next if qty <= 0
+
+        items << { 'hardware_id' => id, 'name' => Hardware.name_of(id), 'category' => Hardware.find(id)&.category || 'unknown',
+                   'qty' => qty, 'part_key' => part_key, 'detail' => detail }
+        issues << { 'severity' => 'warning', 'key' => nil, 'message' => "Hardware '#{id}' is not in the library" } unless Hardware.find(id)
+      end
+
+      doors(params, values, config, st, add)
+      drawers(params, values, add)
+      connectors(params, values, panels, st, add)
+      shelf_pins(panels, st, add)
+      feet(params, add)
+      [items, issues.uniq]
+    end
+
+    def doors(params, values, config, st, add)
+      n = values['door_widths'].size
+      handle = params['handle_type']
+      values['door_widths'].each_index do |i|
+        key = "door_#{i + 1}"
+        h = values['door_height']
+        count = config.hinge_count(h)
+        side = hinge_side(i, n, params['hinge_side'])
+        pos = hinge_positions(h, count, st['hinge_inset'])
+        add.call(params['hinge_type'], count, key, "#{side} side, #{pos.join(' / ')} mm from bottom")
+        next if handle == 'none'
+
+        free = side == 'left' ? 'right' : 'left'
+        add.call(handle, 1, key, "#{st['handle_inset']} mm from #{free} edge, #{st['handle_top_offset']} mm below top")
+      end
+    end
+
+    def drawers(params, values, add)
+      values['drawer_fronts'].each_index do |i|
+        key = "drawer_#{i + 1}_front"
+        add.call(params['runner_type'], 1, key, "pair, length #{values['drawer_box_depth']} mm")
+        add.call(params['handle_type'], 1, key, 'centred on front') unless params['handle_type'] == 'none'
+      end
+    end
+
+    # Joints: [owner part key, joint length]. Fixings sit on the owner part.
+    def joints(values, panels)
+      keys = panels.map(&:key)
+      list = []
+      list << ['side_left', values['side_depth']] << ['side_right', values['side_depth']]
+      %w[brace_front brace_rear].each { |k| 2.times { list << [k, values['brace_depth']] } if keys.include?(k) }
+      2.times { list << ['zone_shelf', values['back_y']] } if keys.include?('zone_shelf')
+      panels.select { |p| p.role == :divider }.each { |p| list << [p.key, values['divider_depth']] }
+      list
+    end
+
+    def connectors(params, values, panels, st, add)
+      type = params['connector_type']
+      per_part = Hash.new(0)
+      joints(values, panels).each do |key, length|
+        per_part[key] += [2, (length / st['connector_spacing']).ceil].max
+      end
+      companions = Hardware.find(type)&.companions || {}
+      per_part.each do |key, qty|
+        add.call(type, qty, key, "#{qty} fixings along its joints")
+        companions.each { |cid, per| add.call(cid, qty * per, key, "with #{Hardware.name_of(type)}") }
+      end
+    end
+
+    def shelf_pins(panels, st, add)
+      panels.select { |p| p.role == :shelf }.each do |p|
+        add.call('shelf_pin', st['shelf_pins_per_shelf'], p.key, "#{st['shelf_pins_per_shelf']} pins per shelf")
+      end
+    end
+
+    # Four feet, plus two more under wide cabinets, only when there is a toe kick.
+    def feet(params, add)
+      return if params['foot_type'] == 'none' || params['toe_kick_height'].to_f <= 0
+
+      add.call(params['foot_type'], params['width'].to_f > 900 ? 6 : 4, 'cabinet', 'under the carcass')
+    end
+  end
+end

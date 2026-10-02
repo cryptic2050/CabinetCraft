@@ -3,13 +3,17 @@
 require 'sketchup.rb'
 
 %w[
-  core/units core/material core/construction core/parameter core/rules core/panel core/cabinet core/library
+  core/units core/material core/construction core/hardware core/parameter core/rules core/edge_banding core/panel
+  core/hardware_rules core/cabinet core/library
   generators/panel_generator generators/cabinet_generator
-  scene/attributes scene/registry
+  manufacturing/parts_list manufacturing/cutting_list exporters/csv_exporter exporters/json_exporter
+  scene/attributes scene/registry scene/settings_store
   ui/controller ui/dialog
 ].each { |f| require File.join(CabinetCraft::PLUGIN_ROOT, f) }
 
 module CabinetCraft
+  Hardware.config = Hardware::Config.new(Scene::SettingsStore.new)
+
   unless file_loaded?(__FILE__)
     open_cmd = ::UI::Command.new('CabinetCraft Pro') { Interface::Dashboard.show }
     open_cmd.tooltip = 'Open CabinetCraft Pro'

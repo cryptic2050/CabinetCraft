@@ -31,7 +31,12 @@ module CabinetCraft
       end
 
       def write_part(entity, row, cabinet)
-        row.each { |k, v| entity.set_attribute(PART_DICT, k, v) }
+        # Only scalar, stable values are stored; derived data (hardware text, edge hashes) is recomputed on demand.
+        row.each do |k, v|
+          next if k == 'hardware' || !(v.is_a?(String) || v.is_a?(Numeric))
+
+          entity.set_attribute(PART_DICT, k, v)
+        end
         entity.set_attribute(PART_DICT, 'cabinet_id', cabinet.id)
         entity.set_attribute(PART_DICT, 'cabinet_label', cabinet.label)
       end

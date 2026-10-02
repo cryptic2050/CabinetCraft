@@ -6,6 +6,7 @@ require 'securerandom'
 require_relative 'parameter'
 require_relative 'rules'
 require_relative 'material'
+require_relative 'hardware_rules'
 require_relative '../generators/panel_generator'
 
 module CabinetCraft
@@ -44,8 +45,31 @@ module CabinetCraft
       "#{label}-#{panel.key.upcase}"
     end
 
+    # Hardware derived on demand from parameters + the current hardware config.
+    # Not memoised: changing a hinge rule must show up immediately.
+    def hardware
+      items, = HardwareRules.compute(params, calculation.values, panels)
+      items
+    end
+
+    def hardware_issues
+      _, issues = HardwareRules.compute(params, calculation.values, panels)
+      issues
+    end
+
     def part_rows
-      panels.map { |p| p.to_h(part_id: part_id(p), cabinet_id: id) }
+      hw = hardware.group_by { |h| h['part_key'] }
+      panels.map do |p|
+        text = (hw[p.key] || []).map { |h| "#{h['qty']} x #{h['name']}" }.join('; ')
+        p.to_h(part_id: part_id(p), cabinet_id: id).merge(
+          'cabinet_id' => id, 'cabinet_label' => label, 'hardware' => text.empty? ? '-' : text
+        )
+      end
+    end
+
+    # One row per hardware item, tagged with the cabinet and part it belongs to.
+    def hardware_rows
+      hardware.map { |h| h.merge('cabinet_id' => id, 'cabinet_label' => label) }
     end
 
     # Same identity, new parameters, bumped version.
@@ -76,6 +100,8 @@ module CabinetCraft
         'construction_type' => params['construction'],
         'shelf_count' => params['shelf_count'],
         'door_count' => params['door_count'],
+        'edge_banding' => "carcass=#{params['edge_carcass']};front=#{params['edge_front']}",
+        'hardware' => [params['hinge_type'], params['runner_type'], params['connector_type'], params['handle_type'], params['foot_type']].join(','),
         'created_date' => created_at,
         'modified_date' => modified_at,
         'version' => version,

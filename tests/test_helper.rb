@@ -7,7 +7,7 @@ module CabinetCraft
 end
 
 %w[core/units core/material core/construction core/parameter core/rules core/panel
-   generators/panel_generator core/cabinet core/library].each do |f|
+   generators/panel_generator core/cabinet core/library core/hardware core/hardware_rules core/edge_banding manufacturing/parts_list manufacturing/cutting_list exporters/csv_exporter exporters/json_exporter].each do |f|
   require File.join(CabinetCraft::PLUGIN_ROOT, f)
 end
 

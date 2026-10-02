@@ -2,6 +2,7 @@
 
 require_relative 'material'
 require_relative 'construction'
+require_relative 'hardware'
 
 module CabinetCraft
   # Parameter schema + coercion/validation for a cabinet. Parameters are plain
@@ -40,8 +41,25 @@ module CabinetCraft
           'note' => 'Used only when doors and drawers are combined.' },
         { 'key' => 'drawer_box_material', 'label' => 'Drawer box material', 'group' => 'DRAWERS', 'type' => 'enum', 'default' => 'mdf_16',
           'options' => Material.carcass.map { |m| { 'value' => m.id, 'label' => m.name } } },
-        { 'key' => 'runner_clearance', 'label' => 'Runner clearance (per side)', 'group' => 'DRAWERS', 'type' => 'length', 'default' => 13.0, 'min' => 5.0, 'max' => 30.0 }
+        { 'key' => 'runner_clearance', 'label' => 'Runner clearance (per side)', 'group' => 'DRAWERS', 'type' => 'length', 'default' => 13.0, 'min' => 5.0, 'max' => 30.0 },
+        { 'key' => 'edge_carcass', 'label' => 'Carcass edge band', 'group' => 'EDGE BANDING', 'type' => 'length', 'default' => 1.0, 'min' => 0.0, 'max' => 3.0,
+          'note' => 'Applied to visible front edges. 0 = none.' },
+        { 'key' => 'edge_front', 'label' => 'Door / drawer front band', 'group' => 'EDGE BANDING', 'type' => 'length', 'default' => 2.0, 'min' => 0.0, 'max' => 3.0,
+          'note' => 'Applied to all four edges of fronts. 0 = none.' },
+        { 'key' => 'hinge_type', 'label' => 'Hinge', 'group' => 'HARDWARE', 'type' => 'enum', 'open' => true, 'default' => 'hinge_standard', 'options' => hw_options('hinge') },
+        { 'key' => 'hinge_side', 'label' => 'Hinge side (single door)', 'group' => 'HARDWARE', 'type' => 'enum', 'default' => 'left',
+          'options' => [{ 'value' => 'left', 'label' => 'Left' }, { 'value' => 'right', 'label' => 'Right' }] },
+        { 'key' => 'handle_type', 'label' => 'Handle', 'group' => 'HARDWARE', 'type' => 'enum', 'open' => true, 'default' => 'none',
+          'options' => [{ 'value' => 'none', 'label' => 'None' }] + hw_options('handle') },
+        { 'key' => 'runner_type', 'label' => 'Drawer runner', 'group' => 'HARDWARE', 'type' => 'enum', 'open' => true, 'default' => 'runner_side_mount', 'options' => hw_options('runner') },
+        { 'key' => 'connector_type', 'label' => 'Connector', 'group' => 'HARDWARE', 'type' => 'enum', 'open' => true, 'default' => 'cam_lock', 'options' => hw_options('connector') },
+        { 'key' => 'foot_type', 'label' => 'Legs / feet (needs toe kick)', 'group' => 'HARDWARE', 'type' => 'enum', 'open' => true, 'default' => 'none',
+          'options' => [{ 'value' => 'none', 'label' => 'None' }] + hw_options('leg') }
       ]
+    end
+
+    def hw_options(category)
+      Hardware.by_category(category).map { |i| { 'value' => i.id, 'label' => i.name } }
     end
 
     def defaults
@@ -84,7 +102,8 @@ module CabinetCraft
         v.round
       when 'enum'
         v = value.to_s
-        raise ArgumentError, 'unknown option' unless field['options'].any? { |o| o['value'] == v }
+        known = field['options'].any? { |o| o['value'] == v }
+        raise ArgumentError, 'unknown option' unless known || (field['open'] && !v.empty?)
 
         v
       else

@@ -29,12 +29,13 @@ module CabinetCraft
       end
 
       def populate(group, cabinet)
+        rows = cabinet.part_rows.to_h { |r| [r['key'], r] } # computed once, not per panel
         cabinet.panels.each do |panel|
           part = group.entities.add_group
           build_box(part.entities, panel)
           part.name = cabinet.part_id(panel)
           part.material = sketchup_material(group, panel)
-          Scene::Attributes.write_part(part, cabinet.part_rows.find { |r| r['key'] == panel.key }, cabinet)
+          Scene::Attributes.write_part(part, rows.fetch(panel.key), cabinet)
         end
         group.name = "#{cabinet.label} #{cabinet.type}"
         Scene::Attributes.write_cabinet(group, cabinet)

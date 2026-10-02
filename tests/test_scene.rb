@@ -1,8 +1,9 @@
 # frozen_string_literal: true
 
 require_relative 'test_helper'
+require 'tmpdir'
 require_relative 'mock_sketchup'
-%w[generators/cabinet_generator scene/attributes scene/registry ui/controller].each do |f|
+%w[generators/cabinet_generator scene/attributes scene/registry scene/settings_store ui/controller].each do |f|
   require File.join(CabinetCraft::PLUGIN_ROOT, f)
 end
 
@@ -161,5 +162,100 @@ class TestScene < Minitest::Test
     assert_equal 1, group.made_unique
     ids = names.dup
     assert_equal ids.uniq, ids
+  end
+end
+
+class TestSceneReports < Minitest::Test
+  def setup
+    Sketchup.reset_model!
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new(CabinetCraft::Scene::SettingsStore.new)
+    @c = CabinetCraft::Interface::Controller.new
+  end
+
+  def test_parts_list_and_cutting_list_cover_every_cabinet
+    @c.create('base_single_door', {})
+    @c.create('base_drawer_3', {})
+    parts = @c.parts_list
+    assert_equal 2, parts['cabinet_count']
+    assert_equal %w[B01 B02], parts['rows'].map { |r| r['cabinet_label'] }.uniq
+    cl = @c.cutting_list
+    assert_equal parts['rows'].size, cl['part_count']
+    assert_equal parts['rows'].size, cl['materials'].sum { |m| m['groups'].sum { |g| g['qty'] } }
+  end
+
+  def test_parts_list_follows_model_edits
+    cab = @c.create('base_single_door', {})['cabinet']
+    door = -> { @c.parts_list['rows'].find { |r| r['key'] == 'door_1' } }
+    assert_equal [717, 597], door.call.values_at('length', 'width')
+    @c.update(cab['id'], cab['params'].merge('width' => 800))
+    assert_equal [797, 717], door.call.values_at('length', 'width') # one source of truth: no stale data
+  end
+
+  def test_part_attributes_hold_scalars_only
+    @c.create('base_single_door', {})
+    group = Sketchup.active_model.entities.grep(Sketchup::Group).first
+    door = group.entities.grep(Sketchup::Group).find { |g| g.name == 'B01-DOOR_1' }
+    dict = door.attribute_dictionary('CabinetCraft_Part')
+    assert_equal 'L1 2.0mm, L2 2.0mm, W1 2.0mm, W2 2.0mm', dict['edge_text']
+    refute dict.key?('hardware')
+    refute dict.key?('edge_codes')
+    dict.each_pair { |_, v| assert(v.is_a?(String) || v.is_a?(Numeric)) }
+  end
+
+  def test_export_formats_write_files
+    @c.create('base_double_door', {})
+    Dir.mktmpdir do |dir|
+      csv = File.join(dir, 'p.csv')
+      assert @c.export('parts', 'csv', csv)['ok']
+      lines = File.read(csv).lines
+      assert_equal 'Part ID,Cabinet,Part name,Length,Width,Thickness,Qty,Material,Grain,Edge banding,Hardware', lines[0].chomp
+      assert_equal @c.parts_list['rows'].size + 1, lines.size
+      xl = File.join(dir, 'p_excel.csv')
+      @c.export('cutting_list', 'excel_csv', xl)
+      assert File.binread(xl).start_with?("\xEF\xBB\xBFsep=,\r\n".b)
+      js = File.join(dir, 'proj.json')
+      @c.export('project', 'json', js)
+      assert_equal 1, JSON.parse(File.read(js))['cabinets'].size
+      hw = File.join(dir, 'hw.csv')
+      @c.export('hardware', 'csv', hw)
+      assert_includes File.read(hw), 'Standard concealed hinge'
+    end
+  end
+
+  def test_export_rejects_bad_requests
+    assert_raises(ArgumentError) { @c.export('nope', 'csv', '/tmp/x') }
+    assert_raises(ArgumentError) { @c.export('project', 'csv', '/tmp/x') }
+    assert_raises(ArgumentError) { @c.export('parts', 'csv', '') }
+    assert_raises(ArgumentError) { @c.export('parts', 'csv', '/no/such/dir/x.csv') }
+  end
+
+  def test_hardware_management_persists_and_protects_used_items
+    state = @c.add_hardware('Soft hinge X', 'hinge', '3.2', 'ACME')
+    custom = state['library'].find { |h| h['custom'] }
+    assert_equal 'Soft hinge X', custom['name']
+    assert_includes state['schema'].find { |f| f['key'] == 'hinge_type' }['options'].map { |o| o['value'] }, custom['id']
+
+    reloaded = CabinetCraft::Hardware::Config.new(CabinetCraft::Scene::SettingsStore.new) # new "session"
+    assert_equal ['Soft hinge X'], reloaded.custom_items.map(&:name)
+
+    @c.create('base_single_door', 'hinge_type' => custom['id'])
+    err = assert_raises(ArgumentError) { @c.delete_hardware(custom['id']) }
+    assert_match(/B01/, err.message)
+    assert_raises(ArgumentError) { @c.delete_hardware('hinge_standard') }
+  end
+
+  def test_changing_hinge_rule_updates_existing_cabinets
+    @c.create('base_single_door', {}) # door 717 -> 2 hinges by default
+    hinges = -> { @c.cutting_list['hardware'].find { |h| h['hardware_id'] == 'hinge_standard' }['qty'] }
+    assert_equal 2, hinges.call
+    @c.set_hinge_rules([{ 'min_height' => 0, 'count' => 3 }])
+    assert_equal 3, hinges.call
+    assert_raises(ArgumentError) { @c.set_hinge_rules([]) }
+  end
+
+  def test_preview_includes_hardware_and_json_safe
+    prev = @c.preview('base_double_door', {})
+    refute_empty prev['hardware']
+    JSON.generate(prev)
   end
 end

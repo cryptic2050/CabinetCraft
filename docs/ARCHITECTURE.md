@@ -48,6 +48,24 @@ doors / drawer fronts sit at y < 0 (in front of the carcass depth D)
 Overall height H includes the toe kick. Door height = zone height - 2 reveals. Drawers-only cabinets split the carcass height
 equally. When drawers fill the cabinet, shelves/dividers are ignored *with a warning*.
 
+## Phase 3: edge banding, hardware, parts and cutting lists
+
+* **Edge banding** (`core/edge_banding.rb`): rules map panel role -> visible faces. Carcass panels get the front edge
+  (`edge_carcass`, default 1 mm); doors/drawer fronts get all four edges (`edge_front`, default 2 mm); hidden parts get none.
+  Edges are stored on the panel as cabinet faces and reported as cutting-list codes L1/L2 (along length) and W1/W2 (along width).
+  Dimensions are *finished* sizes - band thickness is not deducted.
+* **Hardware** (`core/hardware.rb`, `core/hardware_rules.rb`): built-in library + user-defined custom items and rules persisted
+  per user via `Sketchup.write_default` (`scene/settings_store.rb`). Placement is **derived on demand** and never stored in the
+  model, so changing a door height or a hinge rule updates every cabinet at once. Rules: hinge count by door height (table),
+  hinge cup positions, handles (doors + drawer fronts), one runner set per drawer, connectors per joint (length / spacing,
+  min 2; cam locks add a dowel each), 4 shelf pins per shelf, feet when there is a toe kick.
+* **Parts / cutting list** (`manufacturing/`): derived from `Cabinet#part_rows` of every cabinet in the model - no second copy
+  of the data exists. Cutting list groups identical parts (material, kind, size to 0.1 mm, grain, edging) and totals area,
+  band metres and hardware. Sheet counts are an **area estimate, not nesting**.
+* **Exporters** (`exporters/`): CSV, Excel-compatible CSV (UTF-8 BOM, CRLF, `sep=,` hint), JSON. Text cells beginning with
+  `= + - @` are prefixed with `'` so spreadsheets cannot run them as formulas.
+* Part attributes in the model hold only scalar, stable values (IDs, size, material, edge text). Hardware text is recomputed.
+
 ## Folder layout
 
 ```
@@ -55,12 +73,13 @@ cabinetcraft/
   cabinetcraft_pro.rb            loader (registers the extension)
   CabinetCraft/
     main.rb                      toolbar + menu
-    core/        units parameter material construction rules panel cabinet library
+    core/        units parameter material construction rules panel cabinet library edge_banding hardware hardware_rules
     generators/  panel_generator (pure)  cabinet_generator (SketchUp geometry)
-    scene/       attributes registry
+    scene/       attributes registry settings_store
+    manufacturing/ parts_list cutting_list     exporters/ csv_exporter json_exporter
     ui/          controller dialog dashboard.html/.css/.js
     resources/   cabinet.svg
-    manufacturing/ validation/ exporters/ libraries/ utilities/   (empty: reserved for Phases 3-6)
+    validation/ libraries/ utilities/   (empty: reserved for later phases)
   tests/         test_rules  test_parameter_units_cabinet  test_scene  mock_sketchup  ui_bridge (dev harness)
   run_tests.sh
 ```
@@ -83,6 +102,12 @@ cabinetcraft/
 | 2 | Drawer slide types, hinge/handle placement | PLANNED (Phase 3 hardware) |
 | 1 | Material editing, prices, custom materials | PLANNED - library is read-only (not part of this Phase 2 slice) |
 | 1 | Manual dimension overrides ("AUTO" / "MANUAL OVERRIDE") | PLANNED (not yet built). Part keys are stable so overrides can be keyed to them |
-| 2-6 | hardware, edge banding, cutting list, nesting, labels/QR, validation suite, machining, DXF, CNC, templates, standards, costs, assembly | PLANNED |
+| 3 | Edge banding (rule-based, per edge, L1/L2/W1/W2 codes, banding metres) | IMPLEMENTED |
+| 3 | Hardware library (hinges, runners, connectors, handles, shelf pins, legs, locks) + custom items | IMPLEMENTED |
+| 3 | Rule-based placement: hinges by door height (editable table), handles, runners, connectors, shelf pins, feet | IMPLEMENTED (quantities + positions as text; no drilling coordinates yet) |
+| 3 | Parts list: project-wide, sort / filter / search; export CSV, Excel CSV, JSON | IMPLEMENTED |
+| 3 | Cutting list: grouped identical parts, area, sheet estimate, band + hardware totals; export | IMPLEMENTED (sheet count = estimate, not nesting) |
+| 3 | PDF export, in-table editing of parts, per-edge manual banding, locks placement | PLANNED |
+| 4-6 | nesting, labels/QR, validation suite, machining, DXF, CNC, templates, standards, costs, assembly | PLANNED |
 | - | All other library cabinets (wall, tall, wardrobe, vanity, TV, corner...) | PLANNED - listed, not selectable |
 | - | PLACEHOLDER | none: no control exists that does nothing |

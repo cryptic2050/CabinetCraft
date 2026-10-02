@@ -46,3 +46,9 @@ tr.clickable{cursor:pointer}tr.clickable:hover td{background:var(--panel2)}tr.se
 .mute{color:var(--mute)}
 .toast{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--accent);padding:8px 14px;border-radius:8px}
 input[type=search]{width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:7px 9px;margin-bottom:10px}
+
+th.sortable{cursor:pointer;user-select:none}th.sortable:hover{color:var(--text)}
+button.ghost.on{border-color:var(--accent);color:var(--accent)}
+.card input[type=number]{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:4px 6px}
+select{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px}
+.card{overflow-x:auto}.card td,.card th{white-space:nowrap}

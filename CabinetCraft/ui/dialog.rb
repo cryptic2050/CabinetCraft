@@ -71,6 +71,8 @@ module CabinetCraft
         req = JSON.parse(payload)
         id = req['id']
         method = req['method'].to_s
+        return export_with_dialog(id, Array(req['args'])) if method == 'export'
+
         unless Controller::PUBLIC_METHODS.include?(method)
           return reply(id, 'ok' => false, 'error' => "Unknown method #{method}")
         end
@@ -78,6 +80,16 @@ module CabinetCraft
         reply(id, 'ok' => true, 'result' => @controller.public_send(method, *Array(req['args'])))
       rescue StandardError => e
         reply(id, 'ok' => false, 'error' => "#{e.class}: #{e.message}")
+      end
+
+      # Asks the user where to save, then writes the export. Cancel is not an error.
+      def export_with_dialog(id, args)
+        kind, format = args
+        ext = Controller::EXTENSIONS.fetch(format.to_s) { raise ArgumentError, "Unknown format '#{format}'" }
+        path = ::UI.savepanel('Export CabinetCraft data', nil, "cabinetcraft_#{kind}.#{ext}")
+        return reply(id, 'ok' => true, 'result' => { 'ok' => false, 'cancelled' => true }) unless path
+
+        reply(id, 'ok' => true, 'result' => @controller.export(kind, format, path))
       end
 
       def reply(id, message)

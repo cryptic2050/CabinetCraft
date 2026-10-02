@@ -3,6 +3,7 @@
 require_relative '../core/panel'
 require_relative '../core/material'
 require_relative '../core/construction'
+require_relative '../core/edge_banding'
 
 module CabinetCraft
   module Generators
@@ -18,7 +19,7 @@ module CabinetCraft
         panels.concat(toe_kick(ctx))
         panels.concat(doors(ctx))
         panels.concat(drawers(ctx))
-        panels
+        panels.map { |p| EdgeBanding.apply(p, params) }
       end
 
       # Shared lookups so each builder stays short.
@@ -46,9 +47,9 @@ module CabinetCraft
           v['thickness']
         end
 
-        def panel(key, name, role, origin, size, thickness_axis, grain_axis, mat)
+        def panel(key, name, role, origin, size, thickness_axis, grain_axis, mat, grooved_into: [])
           Panel.new(key: key, name: name, role: role, origin: origin, size: size, thickness_axis: thickness_axis,
-                    grain_axis: grain_axis, material_id: mat.id, material_label: mat.name)
+                    grain_axis: grain_axis, material_id: mat.id, material_label: mat.name, grooved_into: grooved_into)
         end
       end
 
@@ -61,11 +62,9 @@ module CabinetCraft
           c.panel('bottom', 'Bottom', :bottom, [0, 0, toe], [c.w, c.d, t], :z, :x, c.carcass_mat),
           c.panel('side_left', 'Left side', :side, [0, 0, toe + t], [t, c.d, v['side_height']], :x, :z, c.carcass_mat),
           c.panel('side_right', 'Right side', :side, [c.w - t, 0, toe + t], [t, c.d, v['side_height']], :x, :z, c.carcass_mat),
-          Panel.new(key: 'back', name: 'Back', role: :back,
-                    origin: [t - c.profile[:groove_depth], v['back_y'], toe + t],
-                    size: [v['back_width'], bt, v['back_height']], thickness_axis: :y, grain_axis: nil,
-                    material_id: "back_#{bt}", material_label: Material.back_label(bt),
-                    grooved_into: %w[side_left side_right])
+          c.panel('back', 'Back', :back, [t - c.profile[:groove_depth], v['back_y'], toe + t],
+                  [v['back_width'], bt, v['back_height']], :y, nil, Material.back_or_custom(bt),
+                  grooved_into: %w[side_left side_right])
         ]
         brace_z = v['carcass_top_z'] - t
         base << brace('brace_front', 'Front rail', [t, 0, brace_z], c)
@@ -140,7 +139,7 @@ module CabinetCraft
         bd = v['drawer_box_depth']
         x0 = c.t + c.params['runner_clearance'].to_f
         r = c.params['door_reveal'].to_f
-        bottom_mat = Material.new(id: "back_#{bot}", name: Material.back_label(bot), thickness: bot, color: '#8a6a4a', role: :back)
+        bottom_mat = Material.back_or_custom(bot)
         out = []
         v['drawer_fronts'].each_with_index do |f, i|
           n = i + 1

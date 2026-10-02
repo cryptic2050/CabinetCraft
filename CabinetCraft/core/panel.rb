@@ -12,11 +12,23 @@ module CabinetCraft
   class Panel
     AXES = %i[x y z].freeze
 
+    # Cabinet-local face names -> [axis, side].
+    FACES = {
+      left: %i[x min], right: %i[x max], front: %i[y min], back: %i[y max], bottom: %i[z min], top: %i[z max]
+    }.freeze
+
+    GENERIC_NAMES = {
+      'side' => 'Side panel', 'bottom' => 'Bottom', 'back' => 'Back', 'brace_front' => 'Front rail',
+      'brace_rear' => 'Rear rail', 'shelf' => 'Shelf', 'zone_shelf' => 'Fixed shelf', 'divider' => 'Divider',
+      'toe_kick' => 'Toe kick', 'door' => 'Door', 'drawer_front' => 'Drawer front', 'drawer_side' => 'Drawer side',
+      'drawer_box_front' => 'Drawer box front', 'drawer_box_back' => 'Drawer box back', 'drawer_bottom' => 'Drawer bottom'
+    }.freeze
+
     attr_reader :key, :name, :role, :origin, :size, :thickness_axis, :grain_axis,
-                :material_id, :material_label, :grooved_into
+                :material_id, :material_label, :grooved_into, :edges
 
     def initialize(key:, name:, role:, origin:, size:, thickness_axis:, material_id:, material_label:,
-                   grain_axis: nil, grooved_into: [])
+                   grain_axis: nil, grooved_into: [], edges: {})
       @key = key
       @name = name
       @role = role
@@ -27,6 +39,45 @@ module CabinetCraft
       @material_id = material_id
       @material_label = material_label
       @grooved_into = grooved_into.freeze # keys of panels this one is housed in (allowed to overlap)
+      @edges = validate_edges(edges).freeze # { face name => band thickness mm }
+    end
+
+    def with_edges(new_edges)
+      self.class.new(key: key, name: name, role: role, origin: origin, size: size, thickness_axis: thickness_axis,
+                     material_id: material_id, material_label: material_label, grain_axis: grain_axis,
+                     grooved_into: grooved_into, edges: new_edges)
+    end
+
+    # Name shared by identical parts, e.g. 'drawer_2_side_left' -> 'Drawer side'.
+    def generic_name
+      k = key.sub(/\Adrawer_\d+_/, 'drawer_').gsub(/_c\d+/, '').sub(/_\d+\z/, '').sub(/_(left|right)\z/, '')
+      GENERIC_NAMES.fetch(k, name)
+    end
+
+    # Cutting-list edge code for a cabinet face: L1/L2 run along the panel length
+    # (they sit on the min/max of the width axis), W1/W2 along the width.
+    def edge_code(face)
+      axis, side = FACES.fetch(face)
+      n = side == :min ? '1' : '2'
+      axis == plane_axes[1] ? "L#{n}" : "W#{n}"
+    end
+
+    # { 'L1' => 1.0, ... } for banded edges only.
+    def edge_codes
+      edges.to_h { |face, mm| [edge_code(face), mm] }.sort.to_h
+    end
+
+    def edge_text
+      return '-' if edges.empty?
+
+      edge_codes.map { |code, mm| "#{code} #{mm}mm" }.join(', ')
+    end
+
+    # { band thickness => metres of banding } for this single panel.
+    def edge_lengths
+      edges.each_with_object(Hash.new(0.0)) do |(face, mm), acc|
+        acc[mm] += (edge_code(face).start_with?('L') ? length : width)
+      end
     end
 
     def size_on(axis)
@@ -87,9 +138,23 @@ module CabinetCraft
         'width' => width.round(3),
         'thickness' => thickness.round(3),
         'material' => material_label,
+        'material_id' => material_id,
+        'generic_name' => generic_name,
         'grain' => grain.to_s,
+        'edge_codes' => edge_codes,
+        'edge_text' => edge_text,
         'qty' => 1
       }
+    end
+
+    private
+
+    def validate_edges(edges)
+      edges.each_key do |face|
+        axis, = FACES.fetch(face) { raise ArgumentError, "unknown face #{face.inspect}" }
+        raise ArgumentError, "face #{face} is not an edge of #{key}" if axis == thickness_axis
+      end
+      edges.select { |_, mm| mm.to_f.positive? }.transform_values(&:to_f)
     end
   end
 end

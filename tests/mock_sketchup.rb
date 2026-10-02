@@ -256,6 +256,14 @@ module Sketchup
     end
   end
 
+  def self.read_default(section, key, default = nil)
+    (@defaults ||= {}).fetch([section, key], default)
+  end
+
+  def self.write_default(section, key, value)
+    (@defaults ||= {})[[section, key]] = value
+  end
+
   def self.active_model
     @active_model ||= Model.new
   end

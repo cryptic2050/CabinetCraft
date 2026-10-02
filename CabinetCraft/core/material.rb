@@ -64,6 +64,13 @@ module CabinetCraft
         BY_ID.key?(id)
       end
 
+      # Library back material of this thickness, or a synthesised custom one.
+      def back_or_custom(thickness)
+        LIBRARY.find { |x| x.role == :back && (x.thickness - thickness).abs < 1e-6 } ||
+          new(id: "custom_back_#{thickness.round(2)}", name: "#{thickness.round(2)}mm back panel",
+              thickness: thickness, color: '#8a6a4a', role: :back, grain: :none)
+      end
+
       # Material label for a back panel of the given thickness.
       def back_label(thickness)
         m = LIBRARY.find { |x| x.role == :back && (x.thickness - thickness).abs < 1e-6 }

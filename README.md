@@ -1,6 +1,11 @@
-# CabinetCraft Pro (Phase 1 + 2)
+# CabinetCraft Pro (Phases 1-3)
 
 Parametric cabinet design to manufacturing data inside SketchUp. Original code; not derived from any other plugin.
+
+**Phase 3 adds** edge banding (rule-based per panel), a hardware library with custom items and rule-based placement
+(hinge count by door height from an editable table, handles, runners, connectors, shelf pins, feet), a project-wide parts list
+(sort / filter / search) and a cutting list (identical parts grouped, area, banding and hardware totals), exportable as CSV,
+Excel-compatible CSV and JSON. Everything is derived from cabinet parameters, so editing a cabinet updates every report.
 
 **Phase 2 adds** slab doors, drawers (front + box), toe kick, vertical dividers and per-compartment shelves, plus presets
 (single/double door, 3/4 drawer, drawer-over-door, open shelf). Doors and drawer fronts sit in front of the carcass depth `D`,
@@ -25,7 +30,8 @@ Open it from the **CabinetCraft Pro** toolbar button or *Extensions > CabinetCra
 1. CABINETS > *Configure & create* on a base cabinet preset.
 2. PARAMETERS: set width/height/depth etc. (defaults 600 x 757 x 562), press **CREATE**.
 3. Edit any value afterwards: only that cabinet is regenerated (one Undo step per change). Select a cabinet in the model to edit it.
-4. PARTS shows the generated panels and dimensions.
+4. PARTS lists every part of every cabinet; REPORTS shows the cutting list; HARDWARE manages the library and hinge rules.
+   Export buttons ask where to save the file.
 
 Construction profile **Standard** is self-consistent (overall height = bottom + sides). **Specification example**
 reproduces the numbers in the product brief (sides 742, back 581x695, rail 564x100); those numbers stack to 760 mm, not 757 mm,
@@ -52,4 +58,10 @@ the generator, registry, controller, undo operations and duplicate-ID repair.
 * Toe kick is a single plinth board; no legs or brackets.
 * Dividers span only the door/open zone; shelves are evenly spaced and the same count in every compartment.
 * Rule constants for drawers (clearance 13 mm, box lift 10 mm, height deduction 40 mm, 50 mm depth steps) are my assumptions - check them against your runners.
-* Manual dimension overrides, editable materials and everything in Phases 3-6 are not implemented.
+* Sheet counts in the cutting list are an area-based estimate (area + 10% waste), **not** a nesting result.
+* Edge banding: finished sizes only (band thickness not deducted); fixed rules per part role, no per-edge manual editing yet.
+* Hardware: quantities and text positions only - no drilling coordinates, prices not used yet, locks are in the library but never placed automatically.
+* Handle position rules (50 mm from the free edge, 100 mm below the top), hinge inset (100 mm), connector spacing (200 mm) are my defaults - editable in HARDWARE.
+* Custom hardware is stored per user (SketchUp defaults), not inside the .skp; opening a model on another machine shows "Unknown hardware" warnings for custom items.
+* PDF export, editing parts in the table, and the Notes column are not implemented.
+* Manual dimension overrides, editable materials and everything in Phases 4-6 are not implemented.
