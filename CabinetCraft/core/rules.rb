@@ -59,7 +59,29 @@ module CabinetCraft
       end
     end
 
+    MATERIAL_KEYS = { 'material' => 'carcass material', 'front_material' => 'front material',
+                      'drawer_box_material' => 'drawer box material', 'back_material' => 'back material' }.freeze
+
+    # Missing materials (e.g. a custom material that is not on this machine) are reported, never raised:
+    # the cabinet stays readable and the user can fix the material.
+    def missing_materials(params)
+      MATERIAL_KEYS.filter_map do |key, label|
+        id = params[key]
+        next if id.nil? || id == 'auto' || Material.exist?(id)
+
+        Issue.new(:error, key, "Material '#{id}' (#{label}) is not in the material library")
+      end
+    end
+
+    def back_thickness(params)
+      id = params['back_material']
+      id && id != 'auto' ? Material.fetch(id).thickness : params['back_thickness'].to_f
+    end
+
     def compute(params)
+      missing = missing_materials(params)
+      return Result.new({}, missing) unless missing.empty?
+
       issues = []
       profile = Construction.fetch(params['construction'])
       v = carcass_values(params, profile)
@@ -76,7 +98,7 @@ module CabinetCraft
       w  = params['width'].to_f
       h  = params['height'].to_f
       d  = params['depth'].to_f
-      bt = params['back_thickness'].to_f
+      bt = back_thickness(params)
       toe = params['toe_kick_height'].to_f
       carcass_h = h - toe
       internal_w = w - 2 * t

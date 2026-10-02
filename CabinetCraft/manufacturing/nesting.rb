@@ -46,12 +46,22 @@ module CabinetCraft
       end
 
       # Allowed orientations as [width along sheet X, height along sheet Y, rotated?].
-      def orientations(part, grain_free)
+      # The sheet's grain runs along its length (X) or, for some materials, its width (Y): a part with directional
+      # grain must have its grain direction on the same axis as the sheet's.
+      def orientations(part, grain_free, grain_axis = 'length')
         l = part['length'].to_f
         w = part['width'].to_f
         return [[l, w, false], [w, l, true]] if grain_free || part['grain'] == 'none'
 
-        part['grain'] == 'width' ? [[w, l, true]] : [[l, w, false]]
+        rotated = (part['grain'] == 'width') != (grain_axis == 'width')
+        rotated ? [[w, l, true]] : [[l, w, false]]
+      end
+
+      # Expected rotation for a grain-constrained part, or nil if free.
+      def required_rotation(part_grain, grain_free, grain_axis)
+        return nil if grain_free || part_grain == 'none'
+
+        (part_grain == 'width') != (grain_axis == 'width')
       end
 
       # parts:   [{ 'uid', 'part_id', 'name', 'length', 'width', 'grain', 'cabinet_label' }]
@@ -110,7 +120,7 @@ module CabinetCraft
         return 'sheet index out of range' unless lk['sheet'].to_i.between?(0, MAX_SHEETS - 1)
 
         rotated = lk['rotated'] ? true : false
-        return 'grain direction forbids this rotation' unless orientations(part, ctx[:sheet]['grain_free']).any? { |_, _, r| r == rotated }
+        return 'grain direction forbids this rotation' unless orientations(part, ctx[:sheet]['grain_free'], ctx[:sheet]['grain_axis'] || 'length').any? { |_, _, r| r == rotated }
 
         x = lk['x'].to_f - ctx[:trim]
         y = lk['y'].to_f - ctx[:trim]
@@ -143,7 +153,7 @@ module CabinetCraft
 
         unplaced = []
         order.each do |part|
-          opts = orientations(part, ctx[:sheet]['grain_free'])
+          opts = orientations(part, ctx[:sheet]['grain_free'], ctx[:sheet]['grain_axis'] || 'length')
           pick = best_spot(sheets, opts, gap)
           if pick.nil? && sheets.size < MAX_SHEETS && opts.any? { |w, h, _| w <= ctx[:uw] + EPS && h <= ctx[:uh] + EPS }
             new_sheet.call
@@ -236,7 +246,7 @@ module CabinetCraft
         {
           'material' => ctx[:sheet]['material'], 'sheet_length' => ctx[:sheet]['sheet_length'], 'sheet_width' => ctx[:sheet]['sheet_width'],
           'trim' => ctx[:trim], 'kerf' => ctx[:settings]['kerf'], 'spacing' => ctx[:settings]['spacing'],
-          'grain_free' => ctx[:sheet]['grain_free'], 'sheets' => sheets,
+          'grain_free' => ctx[:sheet]['grain_free'], 'grain_axis' => ctx[:sheet]['grain_axis'] || 'length', 'sheets' => sheets,
           'unplaced' => run[:unplaced].map { |p| { 'uid' => p['uid'], 'part_id' => p['part_id'], 'name' => p['name'], 'length' => p['length'], 'width' => p['width'] } },
           'released_locks' => released,
           'total_sheets' => sheets.size, 'total_area' => total.round(1), 'used_area' => used.round(1),
@@ -251,8 +261,7 @@ module CabinetCraft
         trim = result['trim']
         gap = result['kerf'] + result['spacing']
         w, h = rotated ? [part['width'], part['length']] : [part['length'], part['width']]
-        sheet = { 'grain_free' => result['grain_free'] }
-        return 'Grain direction does not allow this rotation' unless orientations(part, sheet['grain_free']).any? { |_, _, r| r == rotated }
+        return 'Grain direction does not allow this rotation' unless orientations(part, result['grain_free'], result['grain_axis'] || 'length').any? { |_, _, r| r == rotated }
         return 'Outside the sheet or inside the trim margin' if x < trim - EPS || y < trim - EPS ||
                                                                  x + w > result['sheet_length'] - trim + EPS || y + h > result['sheet_width'] - trim + EPS
         return 'That sheet does not exist' if sheet_index.negative? || sheet_index > result['sheets'].size

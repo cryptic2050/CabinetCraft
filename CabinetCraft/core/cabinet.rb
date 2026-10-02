@@ -38,7 +38,7 @@ module CabinetCraft
     end
 
     def panels
-      @panels ||= Generators::PanelGenerator.generate(params, calculation.values)
+      @panels ||= calculation.ok? ? Generators::PanelGenerator.generate(params, calculation.values) : []
     end
 
     def part_id(panel)
@@ -48,11 +48,15 @@ module CabinetCraft
     # Hardware derived on demand from parameters + the current hardware config.
     # Not memoised: changing a hinge rule must show up immediately.
     def hardware
+      return [] unless calculation.ok?
+
       items, = HardwareRules.compute(params, calculation.values, panels)
       items
     end
 
     def hardware_issues
+      return [] unless calculation.ok?
+
       _, issues = HardwareRules.compute(params, calculation.values, panels)
       issues
     end
@@ -95,7 +99,7 @@ module CabinetCraft
         'height' => params['height'],
         'depth' => params['depth'],
         'material' => params['material'],
-        'material_thickness' => calculation.values['thickness'],
+        'material_thickness' => calculation.values['thickness'], # nil while a material is missing
         'back_thickness' => params['back_thickness'],
         'construction_type' => params['construction'],
         'shelf_count' => params['shelf_count'],

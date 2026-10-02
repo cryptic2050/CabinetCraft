@@ -18,11 +18,24 @@ class TestParameter < Minitest::Test
   end
 
   def test_rejects_bad_values
-    [{ 'width' => 'abc' }, { 'width' => 5 }, { 'shelf_count' => 1.5 }, { 'material' => 'gold' },
+    [{ 'width' => 'abc' }, { 'width' => 5 }, { 'shelf_count' => 1.5 }, { 'construction' => 'gold' },
      { 'width' => Float::NAN }, { 'depth' => 99_999 }].each do |bad|
       _, errors = P.coerce(bad)
       refute_empty errors, bad.inspect
     end
+  end
+
+  def test_unknown_material_ids_stay_readable_but_the_rules_reject_them
+    p, errors = P.coerce('material' => 'gone')
+    assert_empty errors # open enum: the cabinet stays loadable (e.g. a custom material missing on this machine)
+    r = CabinetCraft::Rules.compute(p)
+    refute r.ok?
+    assert_equal ['material'], r.errors.map(&:key)
+    c = CabinetCraft::Cabinet.build(type: 'base_cabinet', params: p, label: 'B01')
+    assert_empty c.panels
+    assert_empty c.hardware
+    assert_empty c.part_rows
+    refute_nil CabinetCraft::Cabinet.from_attributes(c.to_attributes)
   end
 
   def test_unknown_keys_dropped

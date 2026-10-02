@@ -40,6 +40,8 @@ module CabinetCraft
         if t.respond_to?(:xscale) && [t.xscale, t.yscale, t.zscale].any? { |s| (s - 1.0).abs > 1e-6 }
           out << Validation::Validator.issue(:warning, 'cabinet_scaled', 'The cabinet group has been scaled; part sizes no longer match its parameters', cabinet: cab)
         end
+        return out unless cab.calculation.ok? # no expected parts while the rules fail; that error is reported separately
+
         expected = cab.part_rows.to_h { |r| [r['part_id'], r] }
         panels = cab.panels.to_h { |p| [cab.part_id(p), p] }
         children = group.entities.grep(::Sketchup::Group)

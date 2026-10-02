@@ -42,6 +42,15 @@ module CabinetCraft
         @model.set_attribute(DICT, 'nest_locks', JSON.generate(hash))
       end
 
+      # Custom materials (and built-in overrides) used by this model, so it opens correctly on another machine.
+      def materials_snapshot
+        read_json('materials_snapshot')
+      end
+
+      def materials_snapshot=(hash)
+        @model.set_attribute(DICT, 'materials_snapshot', JSON.generate(hash))
+      end
+
       private
 
       def read_json(key)

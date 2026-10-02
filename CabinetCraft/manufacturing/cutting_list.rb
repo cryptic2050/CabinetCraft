@@ -11,12 +11,13 @@ module CabinetCraft
     # sheet area), not a nesting result. Real nesting arrives in Phase 4.
     module CuttingList
       DEFAULT_SHEET = [2440.0, 1220.0].freeze
-      DEFAULT_WASTE_PCT = 10.0
+      DEFAULT_WASTE_PCT = Material::DEFAULT_WASTE_PCT
       GRAIN_TEXT = { 'length' => 'along length', 'width' => 'along width', 'none' => 'none' }.freeze
 
       module_function
 
-      def build(cabinets, waste_pct: DEFAULT_WASTE_PCT)
+      # waste_pct: nil uses each material's own waste allowance (default 10%).
+      def build(cabinets, waste_pct: nil)
         rows = cabinets.flat_map(&:part_rows)
         {
           'materials' => materials(rows, waste_pct),
@@ -24,25 +25,28 @@ module CabinetCraft
           'hardware' => hardware(cabinets),
           'cabinet_count' => cabinets.size,
           'part_count' => rows.size,
-          'estimate_note' => "Sheet counts are an area-based estimate with #{waste_pct}% waste, not a nesting result."
+          'estimate_note' => "Sheet counts are an area-based estimate using each material's waste allowance#{waste_pct ? " (#{waste_pct}% override)" : ''}, not a nesting result."
         }
       end
 
       def sheet_for(material_id)
-        m = Material.exist?(material_id) ? Material.fetch(material_id) : nil
+        m = Material.find(material_id)
         m ? [m.sheet_length.to_f, m.sheet_width.to_f] : DEFAULT_SHEET
       end
 
       def materials(rows, waste_pct)
         rows.group_by { |r| r['material'] }.sort_by { |name, _| name }.map do |name, mrows|
+          mat = Material.find(mrows.first['material_id'])
+          waste = waste_pct || (mat ? mat.waste_pct : DEFAULT_WASTE_PCT)
           sl, sw = sheet_for(mrows.first['material_id'])
           groups = mrows.group_by { |r| group_key(r) }.map { |_, g| group_row(g) }
                         .sort_by { |g| [-g['length'], -g['width'], g['name']] }
           area = mrows.sum { |r| r['length'] * r['width'] } / 1_000_000.0
+          sheets = (area * (1 + waste / 100.0) / (sl * sw / 1_000_000.0)).ceil
           {
             'material' => name, 'thickness' => mrows.first['thickness'], 'sheet_length' => sl, 'sheet_width' => sw,
-            'groups' => groups, 'part_count' => mrows.size, 'area_m2' => area.round(3),
-            'estimated_sheets' => (area * (1 + waste_pct / 100.0) / (sl * sw / 1_000_000.0)).ceil
+            'groups' => groups, 'part_count' => mrows.size, 'area_m2' => area.round(3), 'waste_pct' => waste,
+            'estimated_sheets' => sheets, 'price' => mat&.price, 'estimated_cost' => mat&.price ? (sheets * mat.price).round(2) : nil
           }
         end
       end

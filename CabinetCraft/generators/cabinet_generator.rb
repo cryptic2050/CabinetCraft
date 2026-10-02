@@ -63,11 +63,22 @@ module CabinetCraft
 
         mat = model.materials.add(name)
         mat.color = colour_for(id)
+        apply_texture(mat, id)
         mat
       end
 
+      # Texture is optional and best-effort: a missing or unreadable image never stops generation.
+      def apply_texture(sketchup_material, material_id)
+        path = Material.find(material_id)&.texture
+        return unless path && File.file?(path) && sketchup_material.respond_to?(:texture=)
+
+        sketchup_material.texture = path
+      rescue StandardError
+        nil
+      end
+
       def colour_for(material_id)
-        hex = Material.exist?(material_id) ? Material.fetch(material_id).color : '#8a6a4a'
+        hex = Material.find(material_id)&.color || '#8a6a4a'
         r, g, b = hex.delete('#').scan(/../).map { |c| c.to_i(16) }
         Sketchup::Color.new(r, g, b)
       end

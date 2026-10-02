@@ -444,6 +444,7 @@ class TestSceneCnc < Minitest::Test
   def setup
     Sketchup.reset_model!
     CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new(CabinetCraft::Scene::SettingsStore.new('hardware_config'))
+    CabinetCraft::Material.config = CabinetCraft::MaterialConfig.new
     CabinetCraft::MachiningConfig.current = CabinetCraft::MachiningConfig.new(CabinetCraft::Scene::SettingsStore.new('machining_config'))
     @c = CabinetCraft::Interface::Controller.new
     @c.create('base_double_door', 'handle_type' => 'handle_bar')
@@ -528,5 +529,101 @@ class TestSceneCnc < Minitest::Test
   def test_validation_includes_drilling_through_the_scene
     @c.create('base_cabinet', 'material' => 'ply_12', 'connector_type' => 'cam_lock')
     assert(@c.validate['issues'].any? { |i| i['code'] == 'impossible_drilling' })
+  end
+end
+
+class TestSceneMaterials < Minitest::Test
+  def setup
+    Sketchup.reset_model!
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    CabinetCraft::Material.config = CabinetCraft::MaterialConfig.new
+    @c = CabinetCraft::Interface::Controller.new
+    @model = Sketchup.active_model
+  end
+
+  def groups
+    @model.entities.grep(Sketchup::Group)
+  end
+
+  def custom(over = {})
+    { 'name' => 'Birch 19', 'thickness' => 19, 'role' => 'carcass', 'grain' => 'length', 'sheet_length' => 2500, 'sheet_width' => 1250,
+      'color' => '#c8a878' }.merge(over)
+  end
+
+  def side_thickness_mm(group)
+    s = group.entities.grep(Sketchup::Group).find { |g| g.name.end_with?('SIDE_LEFT') }
+    (s.bounds.max.x - s.bounds.min.x) * 25.4
+  end
+
+  def test_editing_a_material_regenerates_only_the_cabinets_that_use_it
+    mat = @c.save_material(custom)['saved_id']
+    @c.create('base_cabinet', 'material' => mat, 'door_count' => 0)
+    @c.create('base_cabinet', 'door_count' => 0)
+    a, b = groups
+    assert_in_delta 19, side_thickness_mm(a), 1e-6
+    assert_in_delta 18, side_thickness_mm(b), 1e-6
+    ops_before = @model.ops.size
+    res = @c.save_material(custom('id' => mat, 'thickness' => 21))
+    assert_equal 1, res['regenerated']
+    assert_in_delta 21, side_thickness_mm(a), 1e-6 # follows the material
+    assert_in_delta 18, side_thickness_mm(b), 1e-6 # untouched
+    assert_equal 0, b.made_unique
+    assert_equal ops_before + 2, @model.ops.size # one start+commit for the single regeneration
+    assert_equal ['B01'], res['materials'].find { |m| m['id'] == mat }['used_by']
+  end
+
+  def test_delete_is_refused_while_in_use_and_allowed_after
+    mat = @c.save_material(custom)['saved_id']
+    cab = @c.create('base_cabinet', 'material' => mat)['cabinet']
+    err = assert_raises(ArgumentError) { @c.delete_material(mat) }
+    assert_match(/B01/, err.message)
+    @c.update(cab['id'], cab['params'].merge('material' => 'mdf_18'))
+    refute_includes @c.delete_material(mat)['materials'].map { |m| m['id'] }, mat
+    assert_raises(ArgumentError) { @c.delete_material('mdf_18') }
+  end
+
+  def test_builtin_override_and_reset_through_the_controller
+    res = @c.save_material('id' => 'mdf_18', 'price' => 33, 'color' => '#112233')
+    assert_equal 33, res['materials'].find { |m| m['id'] == 'mdf_18' }['price']
+    assert_equal ['mdf_18'], res['overridden']
+    assert_equal 0, @c.reset_material('mdf_18')['regenerated']
+    assert_empty @c.materials_state['overridden']
+  end
+
+  def test_model_carries_its_custom_materials_to_another_machine
+    mat = @c.save_material(custom('name' => 'Portable board', 'price' => 20))['saved_id']
+    @c.create('base_cabinet', 'material' => mat)
+    CabinetCraft::Material.config = CabinetCraft::MaterialConfig.new # a fresh machine: nothing configured
+    refute CabinetCraft::Material.exist?(mat)
+    rows = @c.parts_list['rows'] # any report call restores what the model needs
+    assert CabinetCraft::Material.exist?(mat)
+    assert_equal 'Portable board', rows.find { |r| r['key'] == 'side_left' }['material']
+    assert_equal 'valid', @c.validate['summary']['status'], @c.validate['issues'].inspect
+  end
+
+  def test_missing_material_without_snapshot_is_an_error_not_a_crash
+    mat = @c.save_material(custom)['saved_id']
+    @c.create('base_cabinet', 'material' => mat)
+    @model.set_attribute('CabinetCraft_Project', 'materials_snapshot', '{}')
+    CabinetCraft::Material.config = CabinetCraft::MaterialConfig.new
+    v = @c.validate
+    assert_equal ['missing_material'], v['issues'].map { |i| i['code'] }
+    assert_empty @c.parts_list['rows']
+    assert_equal 1, @c.list['cabinets'].size # the cabinet is still there and editable
+  end
+
+  def test_nesting_uses_the_materials_sheet_size_and_grain
+    mat = @c.save_material(custom('grain' => 'width', 'sheet_length' => 3000, 'sheet_width' => 1500))['saved_id']
+    @c.create('base_cabinet', 'material' => mat, 'door_count' => 0)
+    m = @c.nest['materials'].find { |r| r['material'] == 'Birch 19' }
+    assert_equal [3000.0, 1500.0, 'width', false], [m['sheet_length'], m['sheet_width'], m['grain_axis'], m['grain_free']]
+    side = m['sheets'].flat_map { |s| s['placements'] }.find { |p| p['part_id'] == 'B01-SIDE_LEFT' }
+    assert_equal true, side['rotated'] # vertical-grain side: its length must run along the sheet's width (Y)
+    assert_equal 'valid', @c.validate['summary']['status'], @c.validate['issues'].inspect
+  end
+
+  def test_invalid_material_input_changes_nothing
+    assert_raises(ArgumentError) { @c.save_material(custom('thickness' => 0)) }
+    assert_empty CabinetCraft::Material.config.custom
   end
 end

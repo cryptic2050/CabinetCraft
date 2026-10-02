@@ -3,7 +3,7 @@
 require 'sketchup.rb'
 
 %w[
-  core/units core/material core/construction core/hardware core/parameter core/rules core/edge_banding core/panel
+  core/units core/material core/material_config core/construction core/hardware core/parameter core/rules core/edge_banding core/panel
   core/hardware_rules core/cabinet core/library
   generators/panel_generator generators/cabinet_generator
   manufacturing/parts_list manufacturing/cutting_list manufacturing/cut_sequence manufacturing/nesting manufacturing/labels
@@ -17,6 +17,7 @@ require 'sketchup.rb'
 
 module CabinetCraft
   Hardware.config = Hardware::Config.new(Scene::SettingsStore.new('hardware_config'))
+  Material.config = MaterialConfig.new(Scene::SettingsStore.new('materials_config'))
   MachiningConfig.current = MachiningConfig.new(Scene::SettingsStore.new('machining_config'))
 
   unless file_loaded?(__FILE__)

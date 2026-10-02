@@ -42,7 +42,7 @@
     type: 'base_cabinet', params: null, editing: null, preview: null, cabinets: [], search: '', timer: null, busy: false,
     partsMode: 'project', projectRows: null, partsSearch: '', partsCabinet: '', partsMaterial: '', sort: { key: 'part_id', dir: 1 },
     cutting: null, hw: null,
-    cnc: null, cncCheck: null, cncPrev: null, cncFace: 'a', cncMat: '', cncSheet: 0, nest: null, nestMat: 0, nestSheet: 0, nestSel: null, health: null, labels: null, lookup: null
+    mats: null, matSel: null, cnc: null, cncCheck: null, cncPrev: null, cncFace: 'a', cncMat: '', cncSheet: 0, nest: null, nestMat: 0, nestSheet: 0, nestSel: null, health: null, labels: null, lookup: null
   };
   function load(k, d) { try { return localStorage.getItem(k) || d; } catch (e) { return d; } }
   function save(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* storage may be blocked */ } }
@@ -103,7 +103,7 @@
     if (sec.phase) v.innerHTML = roadmap(sec);
     else if (S.tab === 'cabinets') { v.innerHTML = cabinetsView(); bindCabinets(); }
     else if (S.tab === 'parameters') { v.innerHTML = parametersView(); bindParameters(); paintResults(); }
-    else if (S.tab === 'materials') v.innerHTML = materialsView();
+    else if (S.tab === 'materials') { v.innerHTML = '<p class="mute">Loading...</p>'; loadMaterials(); }
     else if (S.tab === 'parts') { v.innerHTML = partsShell(); bindParts(); loadParts(); }
     else if (S.tab === 'cnc') { v.innerHTML = '<p class="mute">Loading...</p>'; loadCnc(); }
     else if (S.tab === 'nesting') { v.innerHTML = '<p class="mute">Loading...</p>'; loadNesting(); }
@@ -271,7 +271,7 @@
     const c = S.cutting; const v = $('#view'); if (S.tab !== 'reports' || !c) return;
     if (!c.part_count) { v.innerHTML = '<h2>CUTTING LIST</h2><div class="card"><h3>Nothing to report</h3><p>No cabinets in the model yet.</p></div>'; return; }
     const mats = c.materials.map((m) => `<div class="card"><h3>${esc(m.material)}</h3>
-      <p>${m.part_count} parts &middot; ${m.area_m2} m&sup2; &middot; sheet ${fmt(m.sheet_length)} x ${fmt(m.sheet_width)} ${S.unit} &middot; about <b>${m.estimated_sheets}</b> sheet${m.estimated_sheets === 1 ? '' : 's'} (estimate)</p>
+      <p>${m.part_count} parts &middot; ${m.area_m2} m&sup2; &middot; sheet ${fmt(m.sheet_length)} x ${fmt(m.sheet_width)} ${S.unit} &middot; about <b>${m.estimated_sheets}</b> sheet${m.estimated_sheets === 1 ? '' : 's'} (estimate, ${m.waste_pct}% waste)${m.estimated_cost != null ? ` &middot; <b>${m.estimated_cost}</b> at ${m.price}/sheet` : ''}</p>
       <table><thead><tr><th>PART</th><th>LENGTH</th><th>WIDTH</th><th>QTY</th><th>GRAIN</th><th>EDGES</th><th>CABINETS</th></tr></thead><tbody>
       ${m.groups.map((g) => `<tr><td>${esc(g.name)}</td><td class="num">${fmt(g.length)}</td><td class="num">${fmt(g.width)}</td><td class="num"><b>${g.qty}</b></td><td>${GRAIN[g.grain]}</td><td>${esc(g.edge_text)}</td><td class="mute">${esc(g.cabinets)}</td></tr>`).join('')}</tbody></table></div>`).join('');
     const bands = c.edge_banding.length ? `<div class="card"><table>${c.edge_banding.map((b) => `<tr><td>${b.thickness} mm band</td><td class="num">${b.length_m} m</td></tr>`).join('')}</table></div>` : '<p class="mute">No edge banding.</p>';
@@ -553,11 +553,46 @@
     v.querySelectorAll('[data-rmrule]').forEach((b) => (b.onclick = () => { const r = readRules(); r.splice(+b.dataset.rmrule, 1); S.hw.hinge_rules = r; paintHardware(); }));
   }
 
-  function materialsView() {
-    return `<h2>MATERIALS <span class="badge impl">READ-ONLY</span></h2><div class="card"><table><thead><tr><th>NAME</th><th>THK</th><th>SHEET</th><th>GRAIN</th><th>ROLE</th></tr></thead><tbody>
-      ${S.boot.materials.map((m) => `<tr><td><span class="swatch" style="background:${esc(m.color)}"></span>${esc(m.name)}</td><td class="num">${fmt(m.thickness)}</td><td>${fmt(m.sheet_length)} x ${fmt(m.sheet_width)}</td><td>${GRAIN[m.grain]}</td><td>${esc(m.role)}</td></tr>`).join('')}
-      </tbody></table></div><p class="mute">Custom materials, prices and suppliers: planned (Phase 2). Dimensions in ${S.unit}.</p>`;
+  // ---- Materials (editable) ----------------------------------------------------------------
+  function loadMaterials() { rpc('materials_state').then(setMats).catch(showError); }
+  function setMats(m) { S.mats = m; S.boot.schema = m.schema; if (S.tab === 'materials') paintMaterials(); }
+  function paintMaterials() {
+    const v = $('#view'); const m = S.mats; if (S.tab !== 'materials' || !m) return;
+    const sel = m.materials.find((x) => x.id === S.matSel) || null; const isNew = !sel; const builtIn = sel && !sel.custom;
+    const rows = m.materials.map((x) => `<tr class="clickable ${x.id === S.matSel ? 'sel' : ''}" data-mat="${esc(x.id)}"><td><span class="swatch" style="background:${esc(x.color)}"></span>${esc(x.name)}${x.custom ? ' <span class="badge impl">CUSTOM</span>' : m.overridden.includes(x.id) ? ' <span class="badge plan">EDITED</span>' : ''}</td>
+      <td class="num">${fmt(x.thickness)}</td><td>${fmt(x.sheet_length)} x ${fmt(x.sheet_width)}</td><td>${GRAIN_SHEET[x.grain]}</td><td class="num">${x.price != null ? x.price : '-'}</td><td>${esc(x.supplier || '')}</td>
+      <td class="num">${x.waste_allowance != null ? x.waste_allowance + '%' : 'default'}</td><td>${esc(x.edge_options.join(', '))}</td><td class="mute">${esc(x.used_by.join(', '))}</td></tr>`).join('');
+    const d = sel || { name: '', thickness: 18, role: 'carcass', grain: 'length', sheet_length: 2440, sheet_width: 1220, price: '', supplier: '', waste_allowance: '', color: '#d9c7a5', texture: '', edge_options: [0.4, 1, 2] };
+    const dis = (cond) => (cond ? 'disabled' : '');
+    v.innerHTML = `<h2>MATERIALS</h2><div class="card"><table><thead><tr><th>NAME</th><th>THK</th><th>SHEET</th><th>GRAIN</th><th>PRICE</th><th>SUPPLIER</th><th>WASTE</th><th>EDGE BAND</th><th>USED BY</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <h2>${isNew ? 'NEW MATERIAL' : esc(d.name.toUpperCase())}</h2><div class="card"><div class="fields">
+      <div class="field"><label>Name</label><input id="mt_name" value="${esc(d.name)}" ${dis(builtIn)}></div>
+      <div class="field"><label>Thickness (${S.unit})</label><input id="mt_thk" type="number" step="any" value="${toDisp(d.thickness)}" ${dis(builtIn)}></div>
+      <div class="field"><label>Used for</label><select id="mt_role" ${dis(builtIn)}><option value="carcass" ${d.role === 'carcass' ? 'selected' : ''}>Carcass, fronts, drawer boxes</option><option value="back" ${d.role === 'back' ? 'selected' : ''}>Back panels</option></select></div>
+      <div class="field"><label>Grain</label><select id="mt_grain">${m.grains.map((g) => `<option value="${g}" ${g === d.grain ? 'selected' : ''}>${GRAIN_SHEET[g]}</option>`).join('')}</select></div>
+      <div class="field"><label>Sheet length (${S.unit})</label><input id="mt_sl" type="number" step="any" value="${toDisp(d.sheet_length)}"></div>
+      <div class="field"><label>Sheet width (${S.unit})</label><input id="mt_sw" type="number" step="any" value="${toDisp(d.sheet_width)}"></div>
+      <div class="field"><label>Price per sheet</label><input id="mt_price" type="number" step="any" min="0" value="${d.price == null ? '' : d.price}"></div>
+      <div class="field"><label>Supplier</label><input id="mt_sup" value="${esc(d.supplier || '')}"></div>
+      <div class="field"><label>Waste allowance (%)</label><input id="mt_waste" type="number" step="any" min="0" placeholder="default 10" value="${d.waste_allowance == null ? '' : d.waste_allowance}"></div>
+      <div class="field"><label>Colour</label><input id="mt_color" type="color" value="${esc(d.color)}" style="height:34px;padding:2px"></div>
+      <div class="field"><label>Texture image path (optional)</label><input id="mt_tex" value="${esc(d.texture || '')}"></div>
+      <div class="field"><label>Edge-band thicknesses (mm, comma separated)</label><input id="mt_edge" value="${esc(d.edge_options.join(', '))}"></div></div>
+      <div class="row" style="padding:0 12px 12px"><button class="primary" id="mt_save">${isNew ? 'Add material' : 'Save changes'}</button>
+      <button class="ghost" id="mt_new">New material</button>
+      ${sel && sel.custom ? '<button class="ghost" id="mt_del">Delete</button>' : ''}${builtIn && m.overridden.includes(sel.id) ? '<button class="ghost" id="mt_reset">Reset to defaults</button>' : ''}</div></div>
+      <p class="mute">Built-in materials keep their name and thickness; the other fields can be changed. Changing a custom material's thickness regenerates only the cabinets that use it. Custom materials are also stored inside this model, so it opens correctly elsewhere. Sheet grain: along length (X) or width (Y) of the sheet.</p>`;
+    v.querySelectorAll('tr[data-mat]').forEach((r) => (r.onclick = () => { S.matSel = r.dataset.mat; paintMaterials(); }));
+    const after = (res) => { setMats(res); if (res.saved_id) S.matSel = res.saved_id; paintMaterials(); toast(res.regenerated ? `Saved - ${res.regenerated} cabinet${res.regenerated === 1 ? '' : 's'} regenerated` : 'Saved'); };
+    $('#mt_new').onclick = () => { S.matSel = null; paintMaterials(); };
+    $('#mt_save').onclick = () => rpc('save_material', [{
+      id: sel ? sel.id : '', name: $('#mt_name').value, thickness: fromDisp($('#mt_thk').value), role: $('#mt_role').value, grain: $('#mt_grain').value,
+      sheet_length: fromDisp($('#mt_sl').value), sheet_width: fromDisp($('#mt_sw').value), price: $('#mt_price').value, supplier: $('#mt_sup').value,
+      waste_allowance: $('#mt_waste').value, color: $('#mt_color').value, texture: $('#mt_tex').value, edge_options: $('#mt_edge').value }]).then(after).catch(showError);
+    if ($('#mt_del')) $('#mt_del').onclick = () => rpc('delete_material', [sel.id]).then((r) => { S.matSel = null; setMats(r); toast('Deleted'); }).catch(showError);
+    if ($('#mt_reset')) $('#mt_reset').onclick = () => rpc('reset_material', [sel.id]).then(after).catch(showError);
   }
+  const GRAIN_SHEET = { length: 'along sheet length', width: 'along sheet width', none: 'none' };
 
   function projectView() {
     const rows = S.cabinets.map((c) => `<tr class="clickable ${S.editing && S.editing.id === c.id ? 'sel' : ''}" data-id="${esc(c.id)}"><td>${esc(c.label)}</td><td class="num">${fmt(c.params.width)} x ${fmt(c.params.height)} x ${fmt(c.params.depth)}</td><td>v${c.version}</td></tr>`).join('');

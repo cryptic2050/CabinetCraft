@@ -4,6 +4,8 @@ require_relative 'collision_checker'
 require_relative 'machining_checker'
 require_relative '../manufacturing/machining'
 require_relative '../core/material'
+require_relative '../core/rules'
+require_relative '../manufacturing/nesting'
 require_relative '../core/hardware'
 require_relative '../core/edge_banding'
 
@@ -57,21 +59,28 @@ module CabinetCraft
         out = []
         p = cab.params
         calc = cab.calculation
-        calc.errors.each { |e| out << issue(:error, 'impossible_geometry', e.message, cabinet: cab) }
+        calc.errors.each do |e|
+          code = Rules::MATERIAL_KEYS.key?(e.key) ? 'missing_material' : 'impossible_geometry'
+          out << issue(:error, code, e.message, cabinet: cab)
+        end
         return out unless calc.ok? # panels are not meaningful when the rules fail
 
-        out.concat(check_materials(cab))
         out.concat(check_panels(cab))
         out.concat(check_hardware(cab))
         out.concat(check_edges_and_grain(cab))
+        out.concat(check_edge_options(cab))
         out.concat(check_clearances(cab, p))
         out
       end
 
-      def check_materials(cab)
-        %w[material front_material drawer_box_material].filter_map do |k|
-          id = cab.params[k]
-          issue(:error, 'missing_material', "Material '#{id}' (#{k}) is not in the material library", cabinet: cab) unless Material.exist?(id)
+      # Edge-band thicknesses the material is sold with.
+      def check_edge_options(cab)
+        { 'edge_carcass' => 'material', 'edge_front' => 'front_material' }.filter_map do |key, mat_key|
+          mm = cab.params[key].to_f
+          mat = Material.find(cab.params[mat_key])
+          next if mm <= 0 || mat.nil? || mat.edge_options.any? { |o| (o - mm).abs < 1e-6 }
+
+          issue(:warning, 'edge_band_option', "#{mm} mm edge band is not among #{mat.name}'s options (#{mat.edge_options.join(', ')})", cabinet: cab)
         end
       end
 
@@ -117,7 +126,7 @@ module CabinetCraft
             fronts = %i[door drawer_front].include?(pn.role)
             out << issue(:warning, 'missing_edge_banding', "#{pn.name} has no edge banding#{fronts ? ' on a visible front' : ''}", cabinet: cab, part_key: pn.key)
           end
-          mat = Material.exist?(pn.material_id) ? Material.fetch(pn.material_id) : nil
+          mat = Material.find(pn.material_id)
           if mat && mat.grain != :none && pn.grain == :none
             out << issue(:warning, 'grain_direction', "#{pn.name} has no grain direction but #{mat.name} is directional", cabinet: cab, part_key: pn.key)
           end
@@ -169,8 +178,8 @@ module CabinetCraft
           m['released_locks'].each { |l| out << issue(:warning, 'lock_released', "Lock on #{l['part_id']} was released: #{l['reason']}") }
           m['sheets'].each do |sh|
             sh['placements'].each do |pl|
-              bad = !m['grain_free'] && ((pl['grain'] == 'length' && pl['rotated']) || (pl['grain'] == 'width' && !pl['rotated']))
-              next unless bad
+              need = Manufacturing::Nesting.required_rotation(pl['grain'], m['grain_free'], m['grain_axis'] || 'length')
+              next if need.nil? || need == pl['rotated']
 
               cab_id, key = pl['uid'].split(':', 2)
               out << issue(:error, 'grain_direction', "#{pl['part_id']} is placed against its grain direction on sheet #{sh['index'] + 1}", cabinet: by_id[cab_id], part_key: key)

@@ -35,6 +35,7 @@ module CabinetCraft
                           add_hardware delete_hardware set_hinge_rules set_hardware_setting
                           project_state set_project_name nest nest_lock nest_lock_current nest_unlock nest_unlock_all
                           labels lookup_part validate select_target
+                          materials_state save_material delete_material reset_material
                           machining_state set_machining_setting add_pattern delete_pattern select_machine save_machine
                           delete_machine save_post delete_post cnc_check cnc_preview].freeze
 
@@ -56,7 +57,7 @@ module CabinetCraft
           'library' => Library::ENTRIES,
           'planned' => Library::PLANNED,
           'schema' => Parameter.schema,
-          'materials' => Material.all.map(&:to_h),
+          'materials' => (sync_materials && Material.all.map(&:to_h)),
           'profiles' => Construction.list,
           'cabinets' => list['cabinets'],
           'selected' => selected_summary
@@ -97,6 +98,7 @@ module CabinetCraft
                                                       Geom::Transformation.new(Geom::Point3d.new(x, 0, 0)))
           model.selection.clear
           model.selection.add(group)
+          snapshot_materials
         end
         prev.merge('created' => true, 'cabinet' => cabinet.summary, 'panels' => cabinet.part_rows)
       end
@@ -113,6 +115,7 @@ module CabinetCraft
         updated = current.with_params(prev['params'])
         in_operation('CabinetCraft: Edit cabinet') do
           Generators::CabinetGenerator.rebuild(group, updated)
+          snapshot_materials
         end
         prev.merge('updated' => true, 'cabinet' => updated.summary, 'panels' => updated.part_rows)
       end
@@ -120,7 +123,63 @@ module CabinetCraft
       # --- Reports: derived from every cabinet in the model, never stored ---------------
 
       def project_cabinets
+        sync_materials
         Scene::Registry.cabinets(model).map(&:last)
+      end
+
+      # --- Materials ----------------------------------------------------------------------------
+
+      # Restores custom materials stored in the model that this machine does not have yet.
+      def sync_materials
+        added = Material.config.import_missing(project_store.materials_snapshot)
+        added
+      end
+
+      def snapshot_materials
+        project_store.materials_snapshot = Material.config.snapshot
+      end
+
+      def material_users(id)
+        Scene::Registry.cabinets(model).select { |_, c| c.params.values.include?(id) }
+      end
+
+      def materials_state
+        sync_materials
+        users = Scene::Registry.cabinets(model).flat_map { |_, c| c.params.select { |_, v| v.is_a?(String) }.values.uniq.map { |v| [v, c.label] } }.group_by(&:first)
+        {
+          'materials' => Material.all.map { |m| m.to_h.merge('used_by' => (users[m.id] || []).map(&:last).uniq) },
+          'grains' => Material::GRAINS, 'overridden' => Material.config.overrides.keys, 'schema' => Parameter.schema
+        }
+      end
+
+      # Creates or updates a material. Cabinets that use it are regenerated (only those).
+      def save_material(raw)
+        mat = Material.config.save(raw)
+        regenerated = regenerate(material_users(mat.id), 'CabinetCraft: Edit material')
+        snapshot_materials
+        materials_state.merge('saved_id' => mat.id, 'regenerated' => regenerated)
+      end
+
+      def delete_material(id)
+        users = material_users(id)
+        raise ArgumentError, "In use by #{users.map { |_, c| c.label }.join(', ')} - change those cabinets first" unless users.empty?
+
+        Material.config.delete(id) or raise ArgumentError, 'Unknown material'
+        snapshot_materials
+        materials_state
+      end
+
+      def reset_material(id)
+        regenerated = regenerate(material_users(id), 'CabinetCraft: Reset material') if Material.config.reset_override(id)
+        snapshot_materials
+        materials_state.merge('regenerated' => regenerated || 0)
+      end
+
+      def regenerate(pairs, name)
+        return 0 if pairs.empty?
+
+        in_operation(name, reidentify: false) { pairs.each { |group, cab| Generators::CabinetGenerator.rebuild(group, cab) } }
+        pairs.size
       end
 
       def parts_list
@@ -208,8 +267,8 @@ module CabinetCraft
         rows = Manufacturing::PartsList.build(project_cabinets)
         locks = store.locks
         materials = rows.group_by { |r| r['material'] }.sort_by(&:first).map do |label, mrows|
-          mat = Material.exist?(mrows.first['material_id']) ? Material.fetch(mrows.first['material_id']) : nil
-          sheet = { 'material' => label, 'grain_free' => mat.nil? || mat.grain == :none,
+          mat = Material.find(mrows.first['material_id'])
+          sheet = { 'material' => label, 'grain_free' => mat.nil? || mat.grain == :none, 'grain_axis' => mat&.grain == :width ? 'width' : 'length',
                     'sheet_length' => cfg['sheet_length'] || (mat ? mat.sheet_length : 2440).to_f,
                     'sheet_width' => cfg['sheet_width'] || (mat ? mat.sheet_width : 1220).to_f }
           parts = mrows.map { |r| nest_part(r) }

@@ -114,7 +114,9 @@ class TestLabelsAndValidation < Minitest::Test
 
   def test_missing_material_is_an_error
     c = CabinetCraft::Cabinet.build(type: 'base_cabinet', params: params.merge('material' => 'gone'), label: 'B01')
-    assert_raises(KeyError) { c.calculation } # engine refuses unknown materials outright
+    refute c.calculation.ok?
+    issues = V.run([c])
+    assert_equal ['missing_material'], codes(issues) # reported once, nothing else is meaningful
   end
 
   def test_overlap_detection_flags_door_and_drawer_collisions

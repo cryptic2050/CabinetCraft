@@ -63,7 +63,7 @@ module CabinetCraft
           c.panel('side_left', 'Left side', :side, [0, 0, toe + t], [t, c.d, v['side_height']], :x, :z, c.carcass_mat),
           c.panel('side_right', 'Right side', :side, [c.w - t, 0, toe + t], [t, c.d, v['side_height']], :x, :z, c.carcass_mat),
           c.panel('back', 'Back', :back, [t - c.profile[:groove_depth], v['back_y'], toe + t],
-                  [v['back_width'], bt, v['back_height']], :y, nil, Material.back_or_custom(bt),
+                  [v['back_width'], bt, v['back_height']], :y, nil, Material.back_for(c.params, bt),
                   grooved_into: %w[side_left side_right])
         ]
         brace_z = v['carcass_top_z'] - t
