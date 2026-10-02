@@ -3052,3 +3052,129 @@ class TestSelfTest < Minitest::Test
     assert_includes CabinetCraft::Interface::Controller::PUBLIC_METHODS, 'self_test'
   end
 end
+
+class TestNestStudioAssets < Minitest::Test
+  UI_DIR = File.join(CabinetCraft::PLUGIN_ROOT, 'ui')
+
+  def calls(file)
+    File.read(File.join(UI_DIR, file), encoding: 'UTF-8').scan(/rpc\('([a-z_]+)'/).flatten.uniq
+  end
+
+  def test_every_rpc_the_studio_page_makes_is_whitelisted_or_handled_by_the_dialog
+    allowed = CabinetCraft::Interface::Controller::PUBLIC_METHODS + %w[export open_nest_studio start_door_tool]
+    assert_empty calls('nest_studio.js') - allowed
+    assert_empty calls('dashboard.js') - allowed
+  end
+
+  def test_the_studio_page_references_only_files_that_exist
+    html = File.read(File.join(UI_DIR, 'nest_studio.html'))
+    html.scan(/(?:src|href)="([^"]+)"/).flatten.each { |f| assert File.exist?(File.join(UI_DIR, f)), f }
+  end
+
+  def test_the_nesting_payload_has_the_fields_the_studio_reads
+    Sketchup.reset_model!
+    c = CabinetCraft::Interface::Controller.new
+    c.create('base_drawer_3', {})
+    n = c.nest
+    assert_includes n['totals'].keys, 'utilization'
+    m = n['materials'].first
+    %w[material sheet_length sheet_width trim total_sheets unplaced sheets grain_free].each { |k| assert_includes m.keys, k }
+    pl = m['sheets'].first['placements'].first
+    %w[uid part_id name x y w h rotated locked].each { |k| assert_includes pl.keys, k }
+    assert_includes m['sheets'].first.keys, 'utilization'
+  end
+end
+
+class TestDoorSwing < Minitest::Test
+  def setup
+    Sketchup.reset_model!
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    CabinetCraft::Material.config = CabinetCraft::MaterialConfig.new
+    @c = CabinetCraft::Interface::Controller.new
+    @model = Sketchup.active_model
+    @c.create('base_double_door', {})
+    @c.create('base_drawer_3', {})
+    @c.create('base_single_door', {})
+  end
+
+  def door(name_suffix)
+    @model.entities.grep(Sketchup::Group).flat_map { |g| g.entities.grep(Sketchup::Group) }.find { |p| p.name.end_with?(name_suffix) }
+  end
+
+  def corners(part)
+    b = part.bounds
+    [b.min.to_a, b.max.to_a]
+  end
+
+  def test_opening_swings_each_door_about_its_hinge_edge_and_closing_restores_it_exactly
+    closed = corners(door('-DOOR_1')) + corners(door('-DOOR_2'))
+    r = @c.toggle_doors
+    assert_equal [true, 3], [r['open'], r['doors_moved']] # two doors + one single door; the drawer cabinet has none
+    refute_equal closed, corners(door('-DOOR_1')) + corners(door('-DOOR_2'))
+    d1 = door('-DOOR_1')
+    assert_operator d1.transformation.origin.y, :!=, 0.0
+    assert_equal({ 'cabinets' => 2, 'open' => 2, 'default_angle' => 95.0 }, @c.doors_state)
+    r = @c.toggle_doors
+    assert_equal [false, 3], [r['open'], r['doors_moved']]
+    now = corners(door('-DOOR_1')) + corners(door('-DOOR_2'))
+    closed.flatten.zip(now.flatten).each { |a, b| assert_in_delta a, b, 1e-6 }
+    assert_equal 0, @c.doors_state['open']
+  end
+
+  def test_the_free_edge_moves_to_the_front_and_the_hinge_edge_stays_put
+    d1 = door('-DOOR_1') # left hinged (first of two)
+    d2 = door('-DOOR_2') # right hinged
+    before1 = d1.bounds.min.to_a
+    before2 = d2.bounds.max.to_a
+    @c.toggle_doors(nil, 90)
+    a = d1.bounds
+    b = d2.bounds
+    assert_in_delta before1[0], a.min.x, 0.75 # the door pivots about its back-face corner, so the hinge side moves at most one door thickness (18 mm)
+    assert_operator a.min.y, :<, before1[1] - 1 # swung out to the front (-y)
+    assert_in_delta before2[0], b.max.x, 0.75
+    assert_operator b.min.y, :<, -1
+  end
+
+  def test_angles_are_validated_and_closing_needs_no_angle
+    assert_raises(ArgumentError) { @c.toggle_doors(nil, 200) }
+    assert_raises(ArgumentError) { @c.toggle_doors(nil, 'abc') }
+    @c.toggle_doors(nil, 60, true)
+    @c.toggle_doors(nil, 60, true) # already open at that angle: nothing moves twice
+    assert_equal 0, @c.toggle_doors(nil, 60, true)['doors_moved']
+    @c.toggle_doors(nil, nil, false)
+    assert_equal 0, @c.doors_state['open']
+  end
+
+  def test_one_cabinet_only_and_cabinets_without_doors
+    ids = @c.list['cabinets'].map { |x| x['id'] }
+    assert_equal 2, @c.toggle_doors([ids[0]])['doors_moved']
+    assert_equal 1, @c.doors_state['open']
+    assert_equal false, @c.toggle_doors([ids[1]])['ok'] # the drawer cabinet has no doors
+  end
+
+  def test_open_doors_do_not_count_as_hand_edited_or_overlapping_geometry
+    @c.toggle_doors(nil, 95)
+    codes = @c.validate['issues'].map { |i| i['code'] }
+    refute_includes codes, 'geometry_modified'
+    refute_includes codes, 'cabinets_overlap'
+    assert_includes codes, 'doors_open'
+    @c.toggle_doors
+    refute_includes @c.validate['issues'].map { |i| i['code'] }, 'doors_open'
+  end
+
+  def test_editing_a_cabinet_regenerates_closed_doors_and_exploded_cabinets_keep_the_pivot
+    @c.toggle_doors
+    cab = @c.list['cabinets'].first
+    @c.update(cab['id'], cab['params'].merge('width' => 700))
+    assert_equal 1, @c.doors_state['open']
+    @c.toggle_doors
+    assert_equal 0, @c.doors_state['open']
+    @c.explode_cabinet(cab['id'], 100)
+    before = door('-DOOR_1').bounds.min.to_a
+    @c.toggle_doors([cab['id']], 90, true)
+    assert_in_delta before[0], door('-DOOR_1').bounds.min.x, 0.75 # still pivoting at the exploded door's own hinge edge, not the assembled one
+    @c.toggle_doors([cab['id']], nil, false)
+    after = door('-DOOR_1').bounds.min.to_a
+    before.zip(after).each { |a, b| assert_in_delta a, b, 1e-6 }
+  end
+end

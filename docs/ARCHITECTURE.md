@@ -199,5 +199,7 @@ cabinetcraft/
 | 9 | Project dashboard (`manufacturing/dashboard.rb`, `ui/overview_commands.rb`, DASHBOARD tab): KPI tiles, sheet utilisation bars, cost breakdown, readiness checklist (model check, nesting, machining, prices, runs), problem list, hardware totals. Derived on demand, nothing stored; the nesting is computed once per dashboard | IMPLEMENTED |
 | 10 | Bundled templates: wall, tall, wardrobe, vanity, TV base, filler strip, corner bases | IMPLEMENTED |
 | 10 | VIEW modes (`manufacturing/visualization.rb`, `scene/visualization.rb`): colour by material, role, grain, edges, overrides, production, cabinet; presentation alpha; mode stored in the model | IMPLEMENTED |
+| 11 | Nest Studio (`ui/nest_studio.*`): separate nesting workspace window over the same controller | IMPLEMENTED |
+| 11 | Door open / close (`scene/door_swing.rb`, `ui/door_tool.rb`, VIEW tab) | IMPLEMENTED (click tool unverified in SketchUp) |
 | 10 | In-SketchUp self test (`utilities/self_test.rb`), model-change observer rebind, PNG icon fallback, SketchUp 2017 guard | IMPLEMENTED (self test must be run in SketchUp to mean anything) |
 | - | PLACEHOLDER | none: no control exists that does nothing |

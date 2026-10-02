@@ -2,6 +2,7 @@
 
 require 'json'
 require_relative 'controller'
+require_relative 'door_tool'
 
 module CabinetCraft
   # NOTE: named Interface (not UI) so it never shadows SketchUp's ::UI module.
@@ -50,6 +51,16 @@ module CabinetCraft
         end
 
         # Menu entry: runs the in-model API self test and shows the result in a message box.
+        def start_door_tool
+          @instance ||= new
+          @instance.start_door_tool
+        end
+
+        def show_nest_studio
+          @instance ||= new
+          @instance.show_nest_studio
+        end
+
         def show_self_test
           r = Controller.new.self_test
           lines = r['checks'].map { |c| "#{c['ok'] ? 'PASS' : 'FAIL'}  #{c['name']}#{c['ok'] ? '' : " - #{c['detail']}"}" }
@@ -60,6 +71,7 @@ module CabinetCraft
       def initialize
         @controller = Controller.new
         @dialog = nil
+        @studio = nil
         @watcher = nil
         @watched_selection = nil
         @app_watcher = nil
@@ -85,6 +97,27 @@ module CabinetCraft
         attach_app_observer
       end
 
+      def start_door_tool
+        ::Sketchup.active_model.select_tool(DoorTool.new(@controller))
+      end
+
+      # The nesting workspace: a larger window over the same controller (sheet list, canvas, boards, exports).
+      def show_nest_studio
+        if @studio&.visible?
+          @studio.bring_to_front
+          return
+        end
+        @studio = ::UI::HtmlDialog.new(
+          dialog_title: 'CabinetCraft Nest Studio', preferences_key: 'CabinetCraftPro.NestStudio',
+          scrollable: false, resizable: true, width: 1100, height: 720, min_width: 760, min_height: 480,
+          style: ::UI::HtmlDialog::STYLE_DIALOG
+        )
+        @studio.set_file(File.join(CabinetCraft::PLUGIN_ROOT, 'ui', 'nest_studio.html'))
+        studio = @studio
+        @studio.add_action_callback('rpc') { |_ctx, payload| handle_rpc(payload, studio) }
+        @studio.show
+      end
+
       # Called by the selection observer: tell the page which cabinet (if any) is selected.
       def push_selection
         return unless @dialog&.visible?
@@ -101,7 +134,7 @@ module CabinetCraft
           style: ::UI::HtmlDialog::STYLE_DIALOG
         )
         dlg.set_file(File.join(CabinetCraft::PLUGIN_ROOT, 'ui', 'dashboard.html'))
-        dlg.add_action_callback('rpc') { |_ctx, payload| handle_rpc(payload) }
+        dlg.add_action_callback('rpc') { |_ctx, payload| handle_rpc(payload, dlg) }
         dlg.set_on_closed do
           detach_selection_observer
           detach_app_observer
@@ -109,37 +142,49 @@ module CabinetCraft
         dlg
       end
 
-      def handle_rpc(payload)
+      def handle_rpc(payload, dlg = @dialog)
         req = JSON.parse(payload)
         id = req['id']
         method = req['method'].to_s
-        return export_with_dialog(id, Array(req['args'])) if method == 'export'
+        return export_with_dialog(id, Array(req['args']), dlg) if method == 'export'
+        return open_studio_reply(id, dlg) if method == 'open_nest_studio'
+        return door_tool_reply(id, dlg) if method == 'start_door_tool'
 
         unless Controller::PUBLIC_METHODS.include?(method)
-          return reply(id, 'ok' => false, 'error' => "Unknown method #{method}")
+          return reply(id, { 'ok' => false, 'error' => "Unknown method #{method}" }, dlg)
         end
 
-        reply(id, 'ok' => true, 'result' => @controller.public_send(method, *Array(req['args'])))
+        reply(id, { 'ok' => true, 'result' => @controller.public_send(method, *Array(req['args'])) }, dlg)
       rescue StandardError => e
-        reply(id, 'ok' => false, 'error' => "#{e.class}: #{e.message}")
+        reply(id, { 'ok' => false, 'error' => "#{e.class}: #{e.message}" }, dlg)
+      end
+
+      def door_tool_reply(id, dlg)
+        start_door_tool
+        reply(id, { 'ok' => true, 'result' => { 'started' => true } }, dlg)
+      end
+
+      def open_studio_reply(id, dlg)
+        show_nest_studio
+        reply(id, { 'ok' => true, 'result' => { 'opened' => true } }, dlg)
       end
 
       # Asks the user where to save, then writes the export. Cancel is not an error.
-      def export_with_dialog(id, args)
+      def export_with_dialog(id, args, dlg = @dialog)
         kind, format = args
         ext = Controller::EXTENSIONS.fetch(format.to_s) { raise ArgumentError, "Unknown format '#{format}'" }
         path = ::UI.savepanel('Export CabinetCraft data', nil, "cabinetcraft_#{kind}.#{ext}")
-        return reply(id, 'ok' => true, 'result' => { 'ok' => false, 'cancelled' => true }) unless path
+        return reply(id, { 'ok' => true, 'result' => { 'ok' => false, 'cancelled' => true } }, dlg) unless path
 
-        reply(id, 'ok' => true, 'result' => @controller.export(kind, format, path))
+        reply(id, { 'ok' => true, 'result' => @controller.export(kind, format, path) }, dlg)
       end
 
-      def reply(id, message)
-        script("CC.resolve(#{id.to_i}, #{js_json(message)})") if id
+      def reply(id, message, dlg = @dialog)
+        script("CC.resolve(#{id.to_i}, #{js_json(message)})", dlg) if id
       end
 
-      def script(code)
-        @dialog&.execute_script(code)
+      def script(code, dlg = @dialog)
+        dlg&.execute_script(code)
       end
 
       # JSON that is also safe as a JavaScript expression.

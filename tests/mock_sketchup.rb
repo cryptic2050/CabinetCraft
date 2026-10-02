@@ -47,6 +47,23 @@ module Geom
       new(Point3d.new(vector.x, vector.y, vector.z))
     end
 
+    # Rotation by `angle` radians about the axis through `point` (Rodrigues' formula).
+    def self.rotation(point, vector, angle)
+      l = Math.sqrt(vector.x**2 + vector.y**2 + vector.z**2)
+      k = [vector.x / l, vector.y / l, vector.z / l]
+      c = Math.cos(angle)
+      s = Math.sin(angle)
+      rot = lambda do |v|
+        d = k[0] * v[0] + k[1] * v[1] + k[2] * v[2]
+        cr = [k[1] * v[2] - k[2] * v[1], k[2] * v[0] - k[0] * v[2], k[0] * v[1] - k[1] * v[0]]
+        (0..2).map { |i| v[i] * c + cr[i] * s + k[i] * d * (1 - c) }
+      end
+      ex = rot.call([1.0, 0.0, 0.0])
+      ey = rot.call([0.0, 1.0, 0.0])
+      rp = rot.call(point.to_a)
+      new(Point3d.new(point.x - rp[0], point.y - rp[1], point.z - rp[2]), Vector3d.new(*ex), Vector3d.new(*ey))
+    end
+
     # Transformation.new(origin) is a pure translation; Transformation.new(origin, xaxis, yaxis) also rotates (z = x cross y).
     def initialize(origin = Point3d.new, xaxis = nil, yaxis = nil)
       @origin = origin
@@ -86,6 +103,8 @@ module Sketchup
   class SelectionObserver
     def initialize(*); end
   end
+
+  class Tool; end
 
   class AppObserver
     def initialize(*); end

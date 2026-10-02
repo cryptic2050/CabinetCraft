@@ -12,8 +12,8 @@ require 'sketchup.rb'
   core/machining_config manufacturing/cnc_posts manufacturing/machining manufacturing/cnc manufacturing/costing manufacturing/dashboard manufacturing/production manufacturing/visualization manufacturing/assembly exporters/assembly_svg
   exporters/dxf_exporter exporters/svg_exporter exporters/pdf_writer exporters/pdf_reports
   validation/collision_checker validation/machining_checker validation/validator
-  scene/containers scene/attributes scene/registry scene/settings_store scene/project_store scene/explode scene/visualization scene/model_checker
-  utilities/self_test ui/layout_commands ui/overview_commands ui/production_commands ui/visualization_commands ui/run_edit_commands ui/controller ui/dialog
+  scene/containers scene/attributes scene/registry scene/settings_store scene/project_store scene/explode scene/door_swing scene/visualization scene/model_checker
+  utilities/self_test ui/layout_commands ui/overview_commands ui/production_commands ui/visualization_commands ui/run_edit_commands ui/controller ui/door_tool ui/dialog
 ].each { |f| require File.join(CabinetCraft::PLUGIN_ROOT, f) }
 
 module CabinetCraft
@@ -34,6 +34,8 @@ module CabinetCraft
 
     sub = ::UI.menu('Extensions').add_submenu('CabinetCraft Pro')
     sub.add_item(open_cmd)
+    sub.add_item('Open / close doors (click)') { Interface::Dashboard.start_door_tool }
+    sub.add_item('Nest Studio') { Interface::Dashboard.show_nest_studio }
     sub.add_item('Run self test') { Interface::Dashboard.show_self_test }
 
     toolbar = ::UI::Toolbar.new('CabinetCraft Pro')

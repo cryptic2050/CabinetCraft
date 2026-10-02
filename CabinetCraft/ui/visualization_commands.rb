@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../scene/visualization'
+require_relative '../scene/door_swing'
 
 module CabinetCraft
   module Interface
@@ -21,6 +22,31 @@ module CabinetCraft
           Scene::Visualization.apply(model, build_visualization(mode))
         end
         visualization_state
+      end
+
+      # Opens or closes the doors of the given cabinets (all cabinets when none are given), one undo step.
+      # `open` nil toggles: if any door is open everything closes, otherwise everything opens.
+      def toggle_doors(cabinet_ids = nil, angle = nil, open = nil)
+        entries = Scene::Registry.entries(model)
+        ids = Array(cabinet_ids).map(&:to_s)
+        entries = entries.select { |e| ids.include?(e.cabinet.id) } unless ids.empty?
+        entries = entries.select { |e| e.cabinet.calculation.ok? && e.cabinet.panels.any? { |p| p.role == :door } }
+        return { 'ok' => false, 'error' => 'No cabinet with doors to open' } if entries.empty?
+
+        deg = angle.nil? || angle.to_s.empty? ? Scene::DoorSwing::DEFAULT_ANGLE : Float(angle)
+        raise ArgumentError, "Door angle must be between 0 and #{Scene::DoorSwing::MAX_ANGLE.round} degrees" unless deg.between?(0, Scene::DoorSwing::MAX_ANGLE)
+
+        opening = open.nil? ? entries.none? { |e| Scene::DoorSwing.open?(e.entity) } : open ? true : false
+        moved = 0
+        in_operation(opening ? 'CabinetCraft: Open doors' : 'CabinetCraft: Close doors', reidentify: false) do
+          entries.each { |e| moved += Scene::DoorSwing.set(e.entity, e.cabinet, opening ? deg : 0) }
+        end
+        { 'ok' => true, 'open' => opening, 'doors_moved' => moved, 'cabinets' => entries.size }
+      end
+
+      def doors_state
+        entries = Scene::Registry.entries(model).select { |e| e.cabinet.calculation.ok? && e.cabinet.panels.any? { |p| p.role == :door } }
+        { 'cabinets' => entries.size, 'open' => entries.count { |e| Scene::DoorSwing.open?(e.entity) }, 'default_angle' => Scene::DoorSwing::DEFAULT_ANGLE }
       end
 
       # Called inside an operation after geometry was regenerated or production changed: new part groups get the active mode's colours.

@@ -5,7 +5,7 @@ Parametric cabinet design to manufacturing data inside SketchUp. Original code; 
 **Latest additions:** linked cabinet runs with filler strips, corner layouts (blind / L-shaped, left or right hand, changeable), wall / tall /
 wardrobe / vanity / TV / filler templates, a project DASHBOARD, cost estimation, assembly drawings, production tracking per part, CNC tabs
 and machine travel limits, offcut tracking, a wider nesting search, model-colouring VIEW modes (by part kind, grain, edges, overrides,
-production status, presentation), nested/component cabinet discovery, and an in-SketchUp self test.
+production status, presentation), nested/component cabinet discovery, an in-SketchUp self test, a separate **Nest Studio** window (sheet list, canvas, boards, lock/free, exports) and door open/close in the model.
 
 **Also added:** *editable materials* (custom materials and edits of built-in ones: thickness, sheet size, price, supplier, grain, colour,
 texture, waste, edge-band options; stored in the model too), *manual dimension overrides* per part (AUTO / MANUAL OVERRIDE; you are asked

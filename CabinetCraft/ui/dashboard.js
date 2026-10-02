@@ -392,7 +392,7 @@
       <div class="field"><label>Extra spacing (${S.unit})</label><input type="number" step="any" id="n_spacing" value="${toDisp(st.spacing)}"></div>
       <div class="field"><label>Smallest reusable offcut (${S.unit})</label><input type="number" step="any" id="n_minoff" value="${toDisp(st.min_offcut == null ? 150 : st.min_offcut)}"></div>
       <div class="field"><label>Sheet size override (${S.unit}) L x W</label><div class="row"><input type="number" id="n_sl" placeholder="material default" value="${st.sheet_length ? toDisp(st.sheet_length) : ''}" style="width:48%"><input type="number" id="n_sw" value="${st.sheet_width ? toDisp(st.sheet_width) : ''}" style="width:48%"></div></div></div>
-      <div class="row" style="padding:0 12px 12px"><button class="primary" id="n_run">NEST MATERIAL</button><button class="ghost" id="n_unlock">Unlock all parts</button></div></div>`;
+      <div class="row" style="padding:0 12px 12px"><button class="primary" id="n_run">NEST MATERIAL</button><button class="ghost" id="n_unlock">Unlock all parts</button><button class="ghost" id="n_studio">Open Nest Studio</button></div></div>`;
     if (!n || !n.materials.length) { v.innerHTML = `<h2>NESTING</h2>${form}<div class="card"><h3>Nothing to nest</h3><p>No cabinets in the model yet.</p></div>`; bindNestForm(); return; }
     const t = n.totals; const m = n.materials[S.nestMat]; const sh = m.sheets[Math.min(S.nestSheet, m.sheets.length - 1)];
     const stat = (k, val) => `<div class="card" style="flex:1;min-width:110px;text-align:center"><div class="mute" style="font-size:10px">${k}</div><div style="font-size:18px;font-weight:700">${val}</div></div>`;
@@ -420,6 +420,7 @@
       if (g('#n_sl')) o.sheet_length = fromDisp(g('#n_sl')); if (g('#n_sw')) o.sheet_width = fromDisp(g('#n_sw'));
       loadNesting(o);
     };
+    $('#n_studio').onclick = () => rpc('open_nest_studio').catch(showError);
     $('#n_unlock').onclick = () => rpc('nest_unlock_all').then((n) => { S.nest = n; paintNesting(); toast('All parts unlocked'); }).catch(showError);
   }
   function sheetSvg(m, sh) {
@@ -923,14 +924,19 @@
   }
 
   // ---- Production ------------------------------------------------------------------------------------------
-  function loadViz() { rpc('visualization_state').then((z) => { S.viz = z; paintViz(); }).catch(showError); }
+  function loadViz() { Promise.all([rpc('visualization_state'), rpc('doors_state')]).then(([z, d]) => { S.viz = z; S.doors = d; paintViz(); }).catch(showError); }
   function paintViz() {
     const v = $('#view'); const z = S.viz; if (S.tab !== 'view' || !z) return;
     const modes = Object.keys(z.modes).map((k) => `<button class="${k === z.mode ? 'primary' : ''}" data-viz="${esc(k)}">${esc(z.modes[k])}</button>`).join(' ');
     const rows = z.legend.map((l) => `<tr><td><span class="swatch" style="background:${esc(l.color)}"></span>${esc(l.label)}${l.real ? ' <span class="mute">(real material)</span>' : ''}</td><td class="num">${l.count}</td></tr>`).join('');
     v.innerHTML = `<h2>VIEW</h2><div class="card"><h3>Colour the model by</h3><div class="row">${modes}</div>
       <p class="mute">Recolours the part groups in the SketchUp model (one undo step). MATERIAL puts the real materials back; your material data is never changed. The mode is saved in the model and re-applied after edits.</p></div>
+      <div class="card"><h3>Doors</h3><p class="mute">Swings the doors of the cabinets open or closed in the model (one undo step; closing restores the exact position). ${S.doors ? `${S.doors.open} of ${S.doors.cabinets} cabinets with doors are open.` : ''}</p>
+        <div class="row"><div class="field" style="flex:0 0 120px"><label>Angle (deg)</label><input type="number" id="door_angle" min="0" max="120" value="${S.doors ? S.doors.default_angle : 95}"></div>
+        <button class="primary" id="doors_toggle">OPEN / CLOSE ALL DOORS</button><button class="ghost" id="doors_click">Click a cabinet to open it</button></div></div>
       <div class="card"><h3>Legend</h3>${z.parts ? `<table class="legend"><tbody>${rows}</tbody></table>` : '<p class="mute">No cabinets in the model yet.</p>'}</div>`;
+    $('#doors_toggle').onclick = () => rpc('toggle_doors', [null, $('#door_angle').value]).then((r) => { toast(r.ok === false ? r.error : r.open ? 'Doors opened' : 'Doors closed'); loadViz(); }).catch(showError);
+    $('#doors_click').onclick = () => rpc('start_door_tool').then(() => toast('Click a cabinet in SketchUp. Esc to finish.')).catch(showError);
     document.querySelectorAll('[data-viz]').forEach((b) => (b.onclick = () => rpc('set_visualization', [b.dataset.viz]).then((r) => { S.viz = r; paintViz(); toast('View: ' + r.modes[r.mode]); }).catch(showError)));
   }
   function loadProduction() { Promise.all([rpc('production_state'), rpc('nest')]).then(([p, n]) => { S.prod = p; S.prodNest = n; paintProduction(); }).catch(showError); }

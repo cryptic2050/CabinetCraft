@@ -77,7 +77,17 @@ Status words: **FIXED** (no longer a limitation), **MITIGATED** (reduced, a resi
 | No visual check of the model by data | **FIXED** | VIEW tab: colour by material, part kind, grain, edge banding, overrides, production status, cabinet; presentation mode with a see-through carcass. One undo step; mode saved in the model; real materials restored exactly. |
 | PARTS table not editable, no Notes column | **OPEN** | Edits go through parameters or ADVANCED PARTS overrides, by design (one source of truth). |
 
-## 7. Honest bottom line
+## 7. Nest Studio and door animation (added from your video)
+
+| Item | Status | Detail |
+|---|---|---|
+| Nesting workspace in its own window (toolbar, layout scheme list with thumbnails and Rate, canvas with rulers and material filter, Boards / Materials tabs, Lock / Free, Show all / Hide all / Name / Dims, drag to move, exports) | **IMPLEMENTED** | Extensions > CabinetCraft Pro > Nest Studio, or NESTING > Open Nest Studio. Same data and engine as the NESTING tab. Original code and look; it is modelled on the layout of the product in the video, with no branding or code from it. |
+| Toolbar items New / Open / Save / Save as / Import / Stop | **NOT BUILT** | They have no meaning here: the project lives in the .skp, nesting runs instantly and cannot be stopped. I did not add buttons that do nothing. |
+| Radial "QuickToolBar" popup in the model | **NOT BUILT** | A custom popup menu over the SketchUp viewport is not possible with the extension API (only HtmlDialog windows and context menus). The menu under Extensions and the dashboard tabs cover the same commands. |
+| "Pick the panel" grain-match tool with A1/A2 labels | **PARTLY** | VIEW > Grain direction colours every part by grain. The click-to-assign matching-grain groups with printed labels are not built. |
+| Click a cabinet to open / close its doors; open all | **IMPLEMENTED, UNVERIFIED IN SKETCHUP** | Door swing is tested on the mock (hinge edge, exact restore, exploded cabinets, model check). The click tool uses SketchUp's pick helper, which only runs inside SketchUp. Doors swing about the back-face corner of the hinge edge, not a real hinge model, and drawer fronts do not open. |
+
+## 8. Honest bottom line
 
 * Everything above marked FIXED is covered by automated tests on the mock (about 600 tests, hundreds of thousands of assertions) and, for the page, headless-browser smoke tests.
 * Nothing has been run in real SketchUp. Run the self test first; expect small API fixes.

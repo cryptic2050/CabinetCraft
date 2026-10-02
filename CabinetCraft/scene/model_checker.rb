@@ -2,6 +2,7 @@
 
 require_relative 'attributes'
 require_relative 'explode'
+require_relative 'door_swing'
 require_relative 'containers'
 require_relative 'registry'
 require_relative '../validation/validator'
@@ -29,7 +30,9 @@ module CabinetCraft
             next
           end
           issues.concat(check_group(group, cab))
-          if Explode.exploded?(group)
+          if DoorSwing.open?(group)
+            issues << Validation::Validator.issue(:warning, 'doors_open', "#{cab.label} has its doors open in the model. Close them (VIEW tab) before relying on its position check.", cabinet: cab)
+          elsif Explode.exploded?(group)
             issues << Validation::Validator.issue(:warning, 'cabinet_exploded', "#{cab.label} is shown exploded in the model (ASSEMBLY tab: Assemble). Its position is not checked against other cabinets.", cabinet: cab)
           else
             boxes << [cab, Containers.world_box(group, entry.path)]
@@ -74,6 +77,8 @@ module CabinetCraft
         elsif pid != cab.id
           out << Validation::Validator.issue(:error, 'wrong_cabinet_id', "#{part.name} belongs to a different cabinet ID", cabinet: cab, part_key: row['key'])
         end
+        return out if DoorSwing.stored(part) # a swung door has a different bounding box; the doors-open warning covers it
+
         b = part.bounds
         actual = [b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z].map { |v| Units.from_sketchup(v) }.sort
         wanted = panel.size.sort
