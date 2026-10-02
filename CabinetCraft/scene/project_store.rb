@@ -87,6 +87,15 @@ module CabinetCraft
         @model.set_attribute(DICT, 'runs', JSON.generate(hash))
       end
 
+      # The active visualization mode (see Manufacturing::Visualization); 'material' when unset.
+      def viz_mode
+        @model.get_attribute(DICT, 'viz_mode', nil).to_s
+      end
+
+      def viz_mode=(value)
+        @model.set_attribute(DICT, 'viz_mode', value.to_s)
+      end
+
       # Production progress: { part_uid => { 'sig' => size, 'stages' => { stage => iso time } } } (see Manufacturing::Production).
       def production
         read_json('production')

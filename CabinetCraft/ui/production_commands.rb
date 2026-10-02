@@ -45,7 +45,10 @@ module CabinetCraft
         targets = yield(rows).select { |r| Manufacturing::Production.applicable(r, ops).include?(stage) }
         state = project_store.production
         targets.each { |r| state = Manufacturing::Production.mark(state, r, stage, done) }
-        in_operation(operation, reidentify: false) { project_store.production = state }
+        in_operation(operation, reidentify: false) do
+          project_store.production = state
+          refresh_visualization if current_visualization_mode == 'status'
+        end
         production_state.merge('marked' => targets.size)
       end
     end

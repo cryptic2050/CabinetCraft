@@ -38,6 +38,7 @@
     { id: 'nesting', label: 'NESTING', phase: 0 },
     { id: 'labels', label: 'LABELS', phase: 0 },
     { id: 'production', label: 'PRODUCTION', phase: 0 },
+    { id: 'view', label: 'VIEW', phase: 0 },
     { id: 'reports', label: 'REPORTS', phase: 0 },
     { id: 'cnc', label: 'CNC', phase: 0 },
     { id: 'assembly', label: 'ASSEMBLY', phase: 0 },
@@ -175,6 +176,7 @@
     else if (S.tab === 'labels') { v.innerHTML = '<p class="mute">Loading...</p>'; loadLabels(); }
     else if (S.tab === 'reports') { v.innerHTML = '<p class="mute">Loading...</p>'; loadReports(); }
     else if (S.tab === 'dashboard') { v.innerHTML = '<p class="mute">Loading...</p>'; loadDashboard(); }
+    else if (S.tab === 'view') { v.innerHTML = '<p class="mute">Loading...</p>'; loadViz(); }
     else if (S.tab === 'production') { v.innerHTML = '<p class="mute">Loading...</p>'; loadProduction(); }
     else if (S.tab === 'runs') { paintRuns(); }
     else if (S.tab === 'corners') { paintCorners(); }
@@ -921,6 +923,16 @@
   }
 
   // ---- Production ------------------------------------------------------------------------------------------
+  function loadViz() { rpc('visualization_state').then((z) => { S.viz = z; paintViz(); }).catch(showError); }
+  function paintViz() {
+    const v = $('#view'); const z = S.viz; if (S.tab !== 'view' || !z) return;
+    const modes = Object.keys(z.modes).map((k) => `<button class="${k === z.mode ? 'primary' : ''}" data-viz="${esc(k)}">${esc(z.modes[k])}</button>`).join(' ');
+    const rows = z.legend.map((l) => `<tr><td><span class="swatch" style="background:${esc(l.color)}"></span>${esc(l.label)}${l.real ? ' <span class="mute">(real material)</span>' : ''}</td><td class="num">${l.count}</td></tr>`).join('');
+    v.innerHTML = `<h2>VIEW</h2><div class="card"><h3>Colour the model by</h3><div class="row">${modes}</div>
+      <p class="mute">Recolours the part groups in the SketchUp model (one undo step). MATERIAL puts the real materials back; your material data is never changed. The mode is saved in the model and re-applied after edits.</p></div>
+      <div class="card"><h3>Legend</h3>${z.parts ? `<table class="legend"><tbody>${rows}</tbody></table>` : '<p class="mute">No cabinets in the model yet.</p>'}</div>`;
+    document.querySelectorAll('[data-viz]').forEach((b) => (b.onclick = () => rpc('set_visualization', [b.dataset.viz]).then((r) => { S.viz = r; paintViz(); toast('View: ' + r.modes[r.mode]); }).catch(showError)));
+  }
   function loadProduction() { Promise.all([rpc('production_state'), rpc('nest')]).then(([p, n]) => { S.prod = p; S.prodNest = n; paintProduction(); }).catch(showError); }
   function prodCall(method, args, msg) { return rpc(method, args).then((p) => { S.prod = p; toast(msg || `Marked ${p.marked} part${p.marked === 1 ? '' : 's'}`); paintProduction(); if (S.prodPart) lookupProdPart(S.prodCode, true); }).catch(showError); }
   function paintProduction() {

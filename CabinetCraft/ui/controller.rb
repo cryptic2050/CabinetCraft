@@ -23,6 +23,8 @@ require_relative '../core/run'
 require_relative 'layout_commands'
 require_relative 'overview_commands'
 require_relative 'production_commands'
+require_relative 'visualization_commands'
+require_relative '../manufacturing/visualization'
 require_relative 'run_edit_commands'
 require_relative '../manufacturing/production'
 require_relative '../manufacturing/dashboard'
@@ -47,6 +49,7 @@ module CabinetCraft
       include LayoutCommands
       include OverviewCommands
       include ProductionCommands
+      include VisualizationCommands
       include RunEditCommands
 
       PUBLIC_METHODS = %w[bootstrap preview create update select list parts_list cutting_list hardware_state
@@ -61,7 +64,7 @@ module CabinetCraft
                           assembly_state explode_cabinet assemble_cabinet plan_run create_run runs_state restretch_run unlink_run
                           plan_corner create_corner_layout layouts_state unlink_layout restretch_layout change_layout_corner dashboard_state
                           production_state set_part_stage set_cabinet_stage set_sheet_stage
-                          repair_run add_to_run remove_from_run
+                          repair_run add_to_run remove_from_run visualization_state set_visualization
                           machining_state set_machining_setting add_pattern delete_pattern select_machine save_machine
                           delete_machine save_post delete_post cnc_check cnc_preview match_nesting_to_router].freeze
 
@@ -704,6 +707,7 @@ module CabinetCraft
         import ? sync_materials : sync_hardware
         project_store.materials_snapshot = Material.config.snapshot
         snapshot_hardware
+        refresh_visualization
       end
 
       def sync_hardware

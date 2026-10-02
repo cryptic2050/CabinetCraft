@@ -2908,3 +2908,116 @@ class TestChangeCornerKind < Minitest::Test
     assert @c.layouts_state['layouts'].first['in_sync']
   end
 end
+
+class TestVisualizationScene < Minitest::Test
+  V = CabinetCraft::Manufacturing::Visualization
+
+  def setup
+    Sketchup.reset_model!
+    CabinetCraft::Hardware.config = CabinetCraft::Hardware::Config.new
+    CabinetCraft::Material.config = CabinetCraft::MaterialConfig.new
+    @c = CabinetCraft::Interface::Controller.new
+    @model = Sketchup.active_model
+    @c.create('base_double_door', {})
+    @c.create('base_drawer_3', {})
+  end
+
+  def parts
+    @model.entities.grep(Sketchup::Group).flat_map { |g| g.entities.grep(Sketchup::Group) }
+  end
+
+  def materials
+    parts.to_h { |p| [p.name, p.material&.name] }
+  end
+
+  def rgb(part)
+    part.material.color.rgb
+  end
+
+  def hex_rgb(hex)
+    hex.delete('#').scan(/../).map { |c| c.to_i(16) }
+  end
+
+  def test_role_mode_paints_every_part_with_its_legend_colour
+    n = parts.size
+    s = @c.set_visualization('role')
+    assert_equal ['role', n], [s['mode'], s['parts']]
+    assert(parts.all? { |p| p.material.name.start_with?('CabinetCraft viz #') })
+    side = parts.find { |p| p.name.end_with?('-SIDE_LEFT') }
+    structure = s['legend'].find { |l| l['label'].start_with?('Structure') }
+    assert_equal hex_rgb(structure['color']), rgb(side)
+    back = parts.find { |p| p.name.end_with?('-BACK') }
+    assert_equal hex_rgb(s['legend'].find { |l| l['label'] == 'Back' }['color']), rgb(back)
+    assert_equal rgb(parts.find { |p| p.name.end_with?('-SIDE_RIGHT') }), rgb(side) # same role, same colour (and one shared SketchUp material)
+  end
+
+  def test_material_mode_restores_the_real_materials_exactly
+    before = materials
+    @c.set_visualization('role')
+    refute_equal before, materials
+    @c.set_visualization('material')
+    assert_equal before, materials
+    assert_equal 'material', @c.visualization_state['mode']
+  end
+
+  def test_the_mode_is_remembered_in_the_model_and_survives_editing
+    @c.set_visualization('grain')
+    assert_equal 'grain', CabinetCraft::Interface::Controller.new.visualization_state['mode']
+    cab = @c.list['cabinets'].first
+    @c.update(cab['id'], cab['params'].merge('width' => 700)) # regenerates the parts
+    assert(parts.all? { |p| p.material.name.start_with?('CabinetCraft viz #') }, 'regenerated parts must carry the active mode')
+    @c.create('base_single_door', {})
+    assert(parts.all? { |p| p.material.name.start_with?('CabinetCraft viz #') })
+    @c.create_run(1200, [{ 'type' => 'base_cabinet' }, { 'type' => 'base_cabinet' }])
+    assert(parts.all? { |p| p.material.name.start_with?('CabinetCraft viz #') })
+  end
+
+  def test_presentation_makes_the_carcass_see_through_and_keeps_the_fronts_real
+    real = materials
+    @c.set_visualization('presentation')
+    door = parts.find { |p| p.name.end_with?('-DOOR_1') }
+    side = parts.find { |p| p.name.end_with?('-SIDE_LEFT') }
+    assert_equal real[door.name], door.material.name # fronts keep their real material
+    assert_equal V::CARCASS_ALPHA, side.material.alpha
+    assert_nil door.material.alpha
+    @c.set_visualization('material')
+    assert_equal real, materials
+  end
+
+  def test_status_mode_follows_production_marks
+    s = @c.set_visualization('status')
+    assert_equal ['Not started'], s['legend'].map { |l| l['label'] }
+    @c.set_cabinet_stage(@c.list['cabinets'][0]['id'], 'cut', true)
+    amber = hex_rgb(V::WARN)
+    assert(parts.select { |p| p.name.start_with?('B01-') }.all? { |p| rgb(p) == amber }, 'cut parts show as in progress')
+    assert(parts.select { |p| p.name.start_with?('B02-') }.none? { |p| rgb(p) == amber })
+  end
+
+  def test_one_undo_step_and_errors
+    n = @model.instance_variable_get(:@ops).count { |o| o.first == :start }
+    @c.set_visualization('edges')
+    assert_equal n + 1, @model.instance_variable_get(:@ops).count { |o| o.first == :start }
+    assert_raises(ArgumentError) { @c.set_visualization('sparkly') }
+    assert_equal 'edges', @c.visualization_state['mode']
+  end
+
+  def test_shared_materials_are_reused_not_duplicated_per_part
+    @c.set_visualization('role')
+    viz = parts.map { |p| p.material.name }.uniq
+    assert_operator viz.size, :<=, 6 # at most one per role group
+    @c.set_visualization('role')
+    assert_equal viz.sort, parts.map { |p| p.material.name }.uniq.sort
+  end
+
+  def test_nested_cabinets_are_painted_too_and_an_empty_model_is_fine
+    g = @model.entities.grep(Sketchup::Group).first
+    parent = @model.entities.add_group
+    @model.entities.instance_variable_get(:@items).delete_if { |e| e.equal?(g) }
+    parent.entities.instance_variable_get(:@items) << g
+    @c.set_visualization('cabinet')
+    assert(g.entities.grep(Sketchup::Group).all? { |p| p.material.name.start_with?('CabinetCraft viz #') })
+    Sketchup.reset_model!
+    empty = CabinetCraft::Interface::Controller.new
+    assert_equal 0, empty.set_visualization('role')['parts']
+  end
+end

@@ -96,7 +96,7 @@ module Sketchup
   end
 
   class Material
-    attr_accessor :color
+    attr_accessor :color, :alpha
     attr_reader :name
 
     def initialize(name)
