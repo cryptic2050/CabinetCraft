@@ -110,4 +110,4 @@ the generator, registry, controller, undo operations and duplicate-ID repair.
   out for 63.5 x 38.1 mm sheets (use the HTML export for other sizes).
 * Phase 6 so far: custom templates, company standards and cost estimation are implemented. Assembly documentation (steps, exploded view) is not implemented yet.
 * Cost figures are estimates from your own prices; anything unpriced is reported as a warning and counted as 0. Material cost follows the nested sheet count, and the nesting is a heuristic, not proven optimal.
-* Costs are per project (stored in the model); hardware unit prices are per machine (HARDWARE tab) and copy into nothing else, so move them with the settings, not the .skp.
+* Cost settings are stored in the model. Hardware unit prices are stored per machine (HARDWARE tab), so another machine opening the .skp needs the same prices entered.
